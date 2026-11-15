@@ -669,6 +669,40 @@ class SettingsMenuActivity(BaseActivity):
         except Exception:
             pass
         self._draw_toggle(self._visible_start())
+        self._apply_mirror()
+
+    def _apply_mirror(self, restart=False):
+        """Start or stop the mirror service so the toggle takes effect now.
+
+        The service is otherwise only started once, from application.py, when
+        getScreenMirror() is set at launch - flipping this row used to change
+        nothing until the app was restarted, so no COM port ever appeared.
+
+        Runs off the UI thread: start() releases the UDC and modprobes g_serial,
+        stop() joins the serve thread. Both can take a moment.
+
+        Args:
+            restart: stop before starting, so a changed link is picked up
+                instead of reusing the listener that is already running.
+        """
+        import threading
+
+        wanted = self._mirror_state
+
+        def _run():
+            try:
+                from lib.mirror_service import get_service
+                service = get_service()
+                if restart:
+                    service.stop()
+                if wanted:
+                    service.start()
+                elif not restart:
+                    service.stop()
+            except Exception as e:
+                logger.warning('mirror toggle failed: %s', e)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _power(self, action):
         """Shut the device down or restart it; the menu row is the confirmation."""
