@@ -115,6 +115,32 @@ SERIAL_TIMEOUT = 1.0
 # Reconnect interval (seconds)
 RECONNECT_INTERVAL = 2.0
 
+# Window surround: the mask's cyan regions are painted in a colour the window
+# manager can key out. Only Windows implements '-transparentcolor'; elsewhere
+# the surround is painted in a neutral dark instead of a magenta frame.
+KEY_COLOR = '#ff00ff'
+SURROUND_FALLBACK = '#101010'
+
+
+def enable_color_key(root, color=KEY_COLOR, fallback=SURROUND_FALLBACK):
+    """Ask Tk to key out *color*; return the surround colour to paint.
+
+    The attribute is Windows-only, so an X11 or macOS root rejects it. That must
+    never stop the window from opening: the caller paints the returned colour
+    instead of the key.
+    """
+    try:
+        root.attributes('-transparentcolor', color)
+        return color
+    except Exception:
+        return fallback
+
+
+def rgb_of(color):
+    """(r, g, b) of a '#rrggbb' string."""
+    return (int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
+
+
 # ---------------------------------------------------------------------------
 # Hotspot definitions
 # ---------------------------------------------------------------------------
@@ -551,10 +577,13 @@ class MirrorApp:
 
         # Transparency: mask.png cyan (#00fff2) regions become see-through.
         # Use magenta as OS color key — won't appear in the device photo.
-        TRANSPARENT = '#ff00ff'
-        self.root.attributes('-transparentcolor', TRANSPARENT)
-        self._transparent_color = TRANSPARENT
-        self._transparent_rgb = (255, 0, 255)
+        #
+        # The colour key is a Windows-only Tk feature: X11 and macOS reject the
+        # attribute. Without it the key colour would be painted instead of
+        # hidden, framing the device photo in magenta, so the surround falls
+        # back to a neutral dark.
+        self._transparent_color = enable_color_key(self.root)
+        self._transparent_rgb = rgb_of(self._transparent_color)
 
         # Drag support (since no title bar)
         self._drag_x = 0
@@ -563,7 +592,7 @@ class MirrorApp:
         # Canvas background = transparent color key (invisible to user)
         self.canvas = tk.Canvas(
             self.root, width=img_w, height=img_h,
-            highlightthickness=0, bg=TRANSPARENT,
+            highlightthickness=0, bg=self._transparent_color,
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
