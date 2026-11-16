@@ -1,27 +1,84 @@
 #!/bin/sh
-# Pure RNDIS gadget for iCopy-X: USB-C to PC gives power + network.
-# Windows 10+ binds it natively (compatible id RNDIS/5162001).
+# USB network link for iCopy-X: one gadget function, chosen by /etc/icopy/rndis.conf.
 #
-# Device side: 10.1.1.1/24 (DHCP gateway)
-# Re-run at any time; safe when already configured.
+#   driver=rndis  iCopy-X appears as RNDIS   -> Windows + Linux, no driver needed
+#   driver=ecm    iCopy-X appears as CDC-ECM -> macOS + Linux
+#   driver=ncm    iCopy-X appears as CDC-NCM -> macOS + Linux, Windows 11 only
+#
+# role=gateway (default) puts a DHCP server on the interface; role=client asks
+# the host's internet sharing for a lease instead (see icopy-netclient).
+#
+# The script is idempotent: it tears down every gadget function it finds, not
+# just the one it is about to build, so a half-switched state cannot survive.
 G=/sys/kernel/config/usb_gadget/icopy
-F=$G/functions/rndis.usb0
+CONF=/etc/icopy/rndis.conf
+STATUS=/run/icopy-net.status
+DNSMASQ_CONF=/run/icopy-dnsmasq.conf
+
+# ---- defaults: byte-for-byte the behaviour of the first release -------------
+driver=rndis
+role=gateway
+subnet=10.1.1.0/24
+device_ip=10.1.1.1
+pool_start=10.1.1.100
+pool_end=10.1.1.150
+lease=12h
+fixed_octet=2
+
+if [ -r "$CONF" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ''|\#*) continue ;;
+        esac
+        case "$key" in
+            driver|role|subnet|device_ip|pool_start|pool_end|lease|fixed_octet)
+                eval "$key=\$value" ;;
+        esac
+    done < "$CONF"
+fi
+
+case "$driver" in
+    ecm)  FUNCTION=ecm.usb0 ;  PRODUCT='iCopy-X ECM'  ;  NEEDS_OS_DESC=0 ;;
+    ncm)  FUNCTION=ncm.usb0 ;  PRODUCT='iCopy-X NCM'  ;  NEEDS_OS_DESC=0 ;;
+    *)    driver=rndis
+          FUNCTION=rndis.usb0 ; PRODUCT='iCopy-X RNDIS'; NEEDS_OS_DESC=1 ;;
+esac
+
+status() {
+    {
+        echo "driver=$driver"
+        echo "role=$role"
+        echo "address=$1"
+        echo "msg=$2"
+        echo "ts=$(date +%s)"
+    } > "$STATUS"
+}
 
 mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 
+# ---- tear down whatever is there -------------------------------------------
 if [ -d "$G" ]; then
     echo "" > "$G/UDC" 2>/dev/null || true
-    rm -f "$G/configs/c.1/rndis.usb0" "$G/os_desc/c.1" 2>/dev/null || true
-    rmdir "$F/os_desc/interface.rndis" "$F/os_desc" "$F" 2>/dev/null || true
-    rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" 2>/dev/null || true
-    rmdir "$G/strings/0x409" "$G/os_desc" 2>/dev/null || true
-    rmdir "$G" 2>/dev/null || true
+    for link in "$G"/configs/c.1/*; do
+        [ -L "$link" ] && rm -f "$link"
+    done
+    for function in "$G"/functions/*; do
+        [ -d "$function" ] || continue
+        for group in "$function"/os_desc/interface.*; do
+            [ -d "$group" ] && rmdir "$group" 2>/dev/null
+        done
+        rmdir "$function/os_desc" "$function" 2>/dev/null || true
+    done
+    rm -f "$G/os_desc/c.1" 2>/dev/null || true
+    rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" "$G/strings/0x409" \
+          "$G/os_desc" "$G" 2>/dev/null || true
 fi
 
-for m in g_ether g_serial g_acm_ms g_mass_storage; do
-    modprobe -r "$m" 2>/dev/null || true
+for module in g_ether g_serial g_acm_ms g_mass_storage; do
+    modprobe -r "$module" 2>/dev/null || true
 done
 
+# ---- build the requested function ------------------------------------------
 mkdir -p "$G"
 echo 0x1d6b > "$G/idVendor"
 echo 0x0104 > "$G/idProduct"
@@ -30,43 +87,110 @@ echo 0x0201 > "$G/bcdUSB"
 mkdir -p "$G/strings/0x409"
 echo "icopyx-0001" > "$G/strings/0x409/serialnumber"
 echo "Lab401" > "$G/strings/0x409/manufacturer"
-echo "iCopy-X RNDIS" > "$G/strings/0x409/product"
+echo "$PRODUCT" > "$G/strings/0x409/product"
 
-mkdir -p "$F"
-# This vendor kernel defaults these to CDC-ECM (02/06/00) which Windows
-# cannot drive; RNDIS needs e0/01/03.
-echo e0 > "$F/class"
-echo 01 > "$F/subclass"
-echo 03 > "$F/protocol"
-echo "02:11:22:33:44:55" > "$F/dev_addr"
-echo "02:11:22:33:44:66" > "$F/host_addr"
+FUNCTION_DIR="$G/functions/$FUNCTION"
+mkdir -p "$FUNCTION_DIR"
+case "$driver" in
+    rndis)
+        # The vendor kernel defaults these to CDC-ECM (02/06/00), which Windows
+        # cannot drive; RNDIS needs e0/01/03.
+        echo e0 > "$FUNCTION_DIR/class"
+        echo 01 > "$FUNCTION_DIR/subclass"
+        echo 03 > "$FUNCTION_DIR/protocol"
+        ;;
+esac
+echo "02:11:22:33:44:55" > "$FUNCTION_DIR/dev_addr"
+echo "02:11:22:33:44:66" > "$FUNCTION_DIR/host_addr"
 
-mkdir -p "$F/os_desc/interface.rndis"
-echo "RNDIS" > "$F/os_desc/interface.rndis/compatible_id" 2>/dev/null || true
-echo "5162001" > "$F/os_desc/interface.rndis/sub_compatible_id" 2>/dev/null || true
-echo 1 > "$G/os_desc/use" 2>/dev/null || true
+if [ "$NEEDS_OS_DESC" = "1" ]; then
+    # What makes Windows bind without a driver: USB\MS_COMP_RNDIS. The kernel
+    # refuses an MS OS descriptor on the ecm/ncm functions, and macOS does not
+    # use one, so only RNDIS writes it.
+    mkdir -p "$FUNCTION_DIR/os_desc/interface.rndis"
+    echo "RNDIS" > "$FUNCTION_DIR/os_desc/interface.rndis/compatible_id" 2>/dev/null || true
+    echo "5162001" > "$FUNCTION_DIR/os_desc/interface.rndis/sub_compatible_id" 2>/dev/null || true
+    echo 1 > "$G/os_desc/use" 2>/dev/null || true
+fi
 
 mkdir -p "$G/configs/c.1/strings/0x409"
-echo "RNDIS" > "$G/configs/c.1/strings/0x409/configuration"
-ln -s "$F" "$G/configs/c.1/" 2>/dev/null || true
-ln -s "$G/configs/c.1" "$G/os_desc/c.1" 2>/dev/null || true
+echo "$driver" > "$G/configs/c.1/strings/0x409/configuration"
+ln -s "$FUNCTION_DIR" "$G/configs/c.1/" 2>/dev/null || true
+if [ "$NEEDS_OS_DESC" = "1" ]; then
+    ln -s "$G/configs/c.1" "$G/os_desc/c.1" 2>/dev/null || true
+fi
 
-echo musb-hdrc.4.auto > "$G/UDC" || echo "UDC bind failed"
+if ! echo musb-hdrc.4.auto > "$G/UDC"; then
+    status "none" "udc bind failed"
+    echo "RNDIS gadget: UDC bind failed" >&2
+    exit 1
+fi
 
-# The netdev is created asynchronously once the function exists.
+# ---- resolve the netdev the function created --------------------------------
+# The single network function normally comes up as usb0, which is what the
+# units, dnsmasq and the mirror service expect. Only if that name is missing do
+# we look for the interface whose gadget link points into this gadget.
+NETDEV=""
 i=0
-while [ $i -lt 25 ] && [ ! -e /sys/class/net/usb0 ]; do
-    sleep 0.2
+while [ $i -lt 25 ] && [ -z "$NETDEV" ]; do
+    [ -e /sys/class/net/usb0 ] && NETDEV=usb0
+    if [ -z "$NETDEV" ]; then
+        for candidate in /sys/class/net/*; do
+            name=${candidate##*/}
+            case "$name" in lo|eth0) continue ;; esac
+            case "$(readlink -f "$candidate/device" 2>/dev/null)" in
+                *"/usb_gadget/icopy/"*) NETDEV=$name; break ;;
+            esac
+        done
+    fi
+    [ -z "$NETDEV" ] && sleep 0.2
     i=$((i + 1))
 done
 
-if [ -e /sys/class/net/usb0 ]; then
-    nmcli device set usb0 managed no 2>/dev/null || true
-    ip link set usb0 up
-    ip addr add 10.1.1.1/24 dev usb0 2>/dev/null || true
+if [ -z "$NETDEV" ]; then
+    status "none" "no network interface"
+    echo "USB network: no interface appeared" >&2
+    exit 1
 fi
 
-# usb0 may have been recreated: make sure dnsmasq is bound to the new one.
+nmcli device set "$NETDEV" managed no 2>/dev/null || true
+ip link set "$NETDEV" up
+
+if [ "$role" = "client" ]; then
+    # No DHCP server: the host's internet sharing gives us the address.
+    systemctl --no-block stop rndis-dhcp.service >/dev/null 2>&1 || true
+    systemctl --no-block restart icopy-net.service >/dev/null 2>&1 || true
+    status "pending" "asking the host for a lease"
+    echo "USB network: $driver in client role on $NETDEV"
+    exit 0
+fi
+
+# ---- gateway role: address + DHCP server ------------------------------------
+netmask=$(ipcalc -n -m "$device_ip/24" 2>/dev/null | sed -n 's/^Netmask=//p')
+[ -n "$netmask" ] || netmask=255.255.255.0
+case "$subnet" in
+    */24) prefix=24 ;;
+    *)    prefix=24 ;;
+esac
+
+ip addr flush dev "$NETDEV" 2>/dev/null || true
+ip addr add "$device_ip/$prefix" dev "$NETDEV" 2>/dev/null || true
+
+{
+    echo "interface=$NETDEV"
+    echo "bind-interfaces"
+    echo "dhcp-range=$pool_start,$pool_end,$netmask,$lease"
+    echo "dhcp-option=3,$device_ip"
+    echo "dhcp-option=1,$netmask"
+    echo "dhcp-option=28,$(echo "$device_ip" | awk -F. '{printf "%s.%s.%s.255", $1, $2, $3}')"
+    echo "no-resolv"
+    echo "no-hosts"
+    echo "port=0"
+    echo "log-dhcp"
+} > "$DNSMASQ_CONF"
+
 systemctl --no-block restart rndis-dhcp.service >/dev/null 2>&1 || true
 
-echo "RNDIS gadget up: $(ip -4 addr show usb0 2>/dev/null | awk '/inet /{printf "%s ", $2}') / udc=$(cat /sys/class/udc/musb-hdrc.4.auto/state 2>/dev/null)"
+address=$(ip -4 addr show "$NETDEV" 2>/dev/null | awk '/inet /{print $2; exit}')
+status "${address:-none}" "gateway on $NETDEV"
+echo "USB network: $driver gateway, $NETDEV ${address:-no address}, udc=$(cat /sys/class/udc/musb-hdrc.4.auto/state 2>/dev/null)"

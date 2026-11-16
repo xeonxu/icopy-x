@@ -1,15 +1,14 @@
 [Unit]
-Description=DHCP server for iCopy-X RNDIS link (usb0 -> PC)
+Description=DHCP server for the iCopy-X USB network link
 After=rndis.service
 Wants=rndis.service
+# The argument list depends on the profile and the subnet, so rndis.sh writes it
+# and this unit only consumes it. Absent means no gateway role is configured.
+ConditionPathExists=/run/icopy-dnsmasq.conf
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --interface=usb0 --bind-interfaces \
-    --dhcp-range=10.1.1.100,10.1.1.150,255.255.255.0,12h \
-    --dhcp-option=3,10.1.1.1 --dhcp-option=1,255.255.255.0 \
-    --dhcp-option=28,10.1.1.255 \
-    --no-resolv --no-hosts --port=0 --log-dhcp
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/icopy-dnsmasq.conf
 Restart=always
 RestartSec=3
 
