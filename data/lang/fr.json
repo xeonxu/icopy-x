@@ -157,10 +157,10 @@
     "rename_unsupported": "Renommage impossible pour ce dump"
   },
   "tipsmsg": {
-    "net_role": "Rôle de l'appareil",
+    "net_role": "Rôle",
     "net_host_os": "OS hôte",
-    "net_fixed": "Dernier numéro",
-    "net_subnet": "Plage d'adresses",
+    "net_fixed": "N° final",
+    "net_subnet": "Plage",
     "net_status": "État",
     "enter_known_keys_55xx": "Saisissez une clé connue pour \nle T5577 ou l'EM4305",
     "enter_55xx_key_tips": "Clé :",

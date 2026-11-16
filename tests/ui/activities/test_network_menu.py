@@ -175,3 +175,26 @@ def test_status_reports_a_missing_host(state):
                                'msg': 'no lease - gateway fallback'}
     activity = _open()
     assert resources.get_str('net_no_lease') in _texts(activity.getCanvas())
+
+
+_LABEL_KEYS = ('net_role', 'net_host_os', 'net_fixed', 'net_subnet', 'net_status')
+# Measured on the device with the real fonts: 240 px per row, 30 px of margins
+# and a value up to 13 characters. These limits are the character budget that
+# keeps every label+value pair inside the row.
+_LABEL_LIMIT = {'en': 10, 'fr': 10, 'zh': 5}
+
+
+def test_labels_stay_inside_the_row():
+    import json
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    for code, limit in _LABEL_LIMIT.items():
+        path = os.path.join(root, 'data', 'lang', '%s.json' % code)
+        with open(path, encoding='utf-8') as handle:
+            pack = json.load(handle)
+        for key in _LABEL_KEYS:
+            label = pack['tipsmsg'][key]
+            assert len(label) <= limit, (
+                '%s %s is %d characters, the row fits %d: %r'
+                % (code, key, len(label), limit, label))

@@ -157,10 +157,10 @@
         "rename_unsupported": "此转储不支持重命名"
     },
     "tipsmsg": {
-    "net_role": "设备角色",
-    "net_host_os": "主机系统",
-    "net_fixed": "末位数字",
-    "net_subnet": "地址范围",
+    "net_role": "角色",
+    "net_host_os": "系统",
+    "net_fixed": "末位",
+    "net_subnet": "范围",
     "net_status": "状态",
         "enter_known_keys_55xx": "输入T5577或\nEM4305的已知密钥",
         "enter_55xx_key_tips": "密钥：",

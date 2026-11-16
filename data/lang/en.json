@@ -158,10 +158,10 @@
     "rename_unsupported": "Rename not available for this dump"
   },
   "tipsmsg": {
-    "net_role": "Device role",
+    "net_role": "Role",
     "net_host_os": "Host OS",
-    "net_fixed": "Last number",
-    "net_subnet": "Address range",
+    "net_fixed": "Last digit",
+    "net_subnet": "Range",
     "net_status": "Status",
     "enter_known_keys_55xx": "Enter a known key for \nT5577 or EM4305",
     "enter_55xx_key_tips": "Key:",

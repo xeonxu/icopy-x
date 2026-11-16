@@ -952,7 +952,7 @@ class NetworkActivity(BaseActivity):
             )
             canvas.create_text(
                 SCREEN_W - 15, y, text=value, fill=color,
-                font=resources.get_font(12), anchor='e', tags='net_row',
+                font=resources.get_font(11), anchor='e', tags='net_row',
             )
 
     # ── interaction ──────────────────────────────────────────────────
