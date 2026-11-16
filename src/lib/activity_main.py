@@ -831,6 +831,10 @@ class NetworkActivity(BaseActivity):
     _ROW_STATUS = 4
     _ROW_COUNT = 5
 
+    # Status file poll interval: the address appears a few seconds after a role
+    # or profile change, so the row has to catch up on its own.
+    _STATUS_POLL_MS = 500
+
     _LABEL_KEYS = {
         _ROW_ROLE: 'net_role',
         _ROW_DRIVER: 'net_host_os',
@@ -848,6 +852,7 @@ class NetworkActivity(BaseActivity):
         self._octet = 2
         self._status = {}
         self._applying = False
+        self._poll_timer = None
         super().__init__(bundle)
 
     # ── state ────────────────────────────────────────────────────────
@@ -864,6 +869,7 @@ class NetworkActivity(BaseActivity):
             pass
         self._status = self._read_status()
         self._render()
+        self._start_status_poll()
 
     def _netconfig(self):
         import netconfig
@@ -883,6 +889,58 @@ class NetworkActivity(BaseActivity):
         self._status = self._read_status()
         if self.getCanvas() is not None:
             self._render()
+        self._start_status_poll()
+
+    def onPause(self):
+        self._stop_status_poll()
+        super().onPause()
+
+    def onDestroy(self):
+        self._stop_status_poll()
+        super().onDestroy()
+
+    # ── live status ──────────────────────────────────────────────────
+
+    def _start_status_poll(self):
+        """Follow the status file while the screen is open.
+
+        The address on this screen is produced *after* the screen is drawn: a
+        profile switch re-enumerates the device and the host answers seconds
+        later, and in the Client role the lease only exists once the host's DHCP
+        server has restarted. Reading the file once on entry would leave the
+        operator looking at a stale row, so it is re-read until they leave.
+        """
+        if self._poll_timer is not None:
+            return
+        canvas = self.getCanvas()
+        if canvas is None or not hasattr(canvas, 'after'):
+            return
+        try:
+            self._poll_timer = canvas.after(self._STATUS_POLL_MS, self._poll_status)
+        except Exception:
+            self._poll_timer = None
+
+    def _stop_status_poll(self):
+        timer, self._poll_timer = self._poll_timer, None
+        if timer is None:
+            return
+        canvas = self.getCanvas()
+        try:
+            if canvas is not None:
+                canvas.after_cancel(timer)
+        except Exception:
+            pass
+
+    def _poll_status(self):
+        """One poll step: repaint only when the file actually changed."""
+        self._poll_timer = None
+        if self.getCanvas() is None:
+            return
+        status = self._read_status()
+        if status != self._status:
+            self._status = status
+            self._render()
+        self._start_status_poll()
 
     # ── layout ───────────────────────────────────────────────────────
 

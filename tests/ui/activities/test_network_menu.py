@@ -254,3 +254,40 @@ def test_the_address_row_says_whose_address_it_is(state):
     label, value = activity._rows()[activity._ROW_FIXED]
     assert label == resources.get_str('net_device_ip')
     assert value == '.10'
+
+
+def test_the_status_row_follows_the_file_while_the_screen_is_open(state):
+    """The address is produced after the screen is drawn; the row must catch up.
+
+    A profile switch re-enumerates the device and the host answers seconds
+    later, so a single read on entry leaves the operator looking at a stale row.
+    """
+    activity = _open()
+    canvas = activity.getCanvas()
+    assert canvas is not None
+    assert activity._poll_timer is not None, 'the screen does not follow the status file'
+
+    state['status']['value'] = {'role': 'client', 'address': '192.168.137.2/24',
+                               'msg': 'lease 192.168.137.2'}
+    canvas.advance(activity._STATUS_POLL_MS)
+    assert '192.168.137.2/24' in _texts(canvas)
+
+    # And once more: the poll must reschedule itself, not fire once.
+    state['status']['value'] = {'role': 'client', 'address': 'none',
+                               'msg': 'no lease - gateway fallback'}
+    canvas.advance(activity._STATUS_POLL_MS)
+    assert resources.get_str('net_no_lease') in _texts(canvas)
+    assert '192.168.137.2/24' not in _texts(canvas)
+
+
+def test_leaving_the_screen_stops_the_poll(state):
+    """No timer may outlive the screen that owns it."""
+    activity = _open()
+    canvas = activity.getCanvas()
+    activity.onPause()
+    assert activity._poll_timer is None
+
+    state['status']['value'] = {'role': 'client', 'address': '192.168.137.2/24',
+                               'msg': 'lease 192.168.137.2'}
+    canvas.advance(activity._STATUS_POLL_MS * 4)
+    assert '192.168.137.2/24' not in _texts(canvas), 'a paused screen kept repainting'
