@@ -20,13 +20,18 @@
 # This entire header "Required Notice" must remain in place.
 ##########################################################################
 
-"""Panel power while no USB host is attached.
+"""Panel power: blank the backlight when nobody is using the device.
 
-The condition is the USB link, not user input: the gadget netdev exists and its
-carrier is up. When the link has been absent for longer than the configured
-timeout the backlight goes off; the next key press turns it back on and restarts
-the dwell time. Nothing about the network is retried or reverted because of this
-— it is a panel decision, not a link-health one.
+Two things count as "nobody is using it", and either one blanks the panel:
+
+  * no key press for the configured time — the operator walked away with the
+    cable still in the computer, which is the ordinary case; and
+  * no USB host for the configured time — the device is lying on a desk with
+    the cable unplugged, where the gadget netdev has no carrier.
+
+The first key press turns the backlight back on and restarts both dwell times.
+Nothing about the network is retried or reverted because of this — it is a panel
+decision, not a link-health one.
 
 The decisions are pure functions and the driver is injected, so the whole
 behaviour is testable on a host with no serial port and no gadget.
@@ -100,7 +105,7 @@ def _configured_timeout():
 
 
 class PanelSleep:
-    """Watch the USB link and drive the backlight.
+    """Watch the key presses and the USB link, and drive the backlight.
 
     Everything device-specific is injected (``present``, ``blank``, ``unblank``,
     ``timeout_minutes``, ``clock``, ``interval``), which keeps the state machine
@@ -118,6 +123,7 @@ class PanelSleep:
         self.schedule = schedule or (lambda action: action())
         self._lock = threading.Lock()
         self._absent_since = None
+        self._last_key = None
         self._blanked = False
         self._stop = threading.Event()
         self._thread = None
@@ -136,32 +142,57 @@ class PanelSleep:
         if changed:
             self.schedule(self.blank_action if value else self.unblank_action)
 
+    def idle_seconds(self, now=None):
+        """Seconds since the last key press; 0 before the first poll."""
+        now = self.clock() if now is None else now
+        with self._lock:
+            return 0 if self._last_key is None else now - self._last_key
+
     def poll(self):
         """One decision step. Returns True when the panel state changed."""
         now = self.clock()
         with self._lock:
             was_blanked = self._blanked
-        if self.present_source():
-            with self._lock:
+            if self._last_key is None:
+                self._last_key = now
+        present = self.present_source()
+        with self._lock:
+            if present:
+                if self._absent_since is not None:
+                    # The host came back, which means someone plugged the cable
+                    # in: that is activity, so the dwell time restarts.
+                    self._last_key = now
                 self._absent_since = None
-            self._set_blanked(False)
-        else:
-            with self._lock:
+                absent_for = None
+            else:
                 if self._absent_since is None:
                     self._absent_since = now
                 absent_for = now - self._absent_since
-            if should_blank(absent_for, self.timeout_source()):
-                self._set_blanked(True)
+            idle_for = now - self._last_key
+        timeout = self.timeout_source()
+        # Either nobody has touched the device, or there is no host attached:
+        # both mean the panel is not being read.
+        blank = should_blank(idle_for, timeout) or (
+            absent_for is not None and should_blank(absent_for, timeout))
+        if blank:
+            self._set_blanked(True)
+        elif present:
+            self._set_blanked(False)
         return self.blanked != was_blanked
 
     def note_key(self):
-        """A key press brings the panel back and restarts the dwell time."""
-        if not self.blanked:
-            return False
+        """A key press brings the panel back and restarts both dwell times."""
+        now = self.clock()
         with self._lock:
-            self._absent_since = self.clock() if not self.present_source() else None
-        self._set_blanked(False)
-        return True
+            self._last_key = now
+            was_blanked = self._blanked
+            if not self.present_source():
+                self._absent_since = now
+            else:
+                self._absent_since = None
+        if was_blanked:
+            self._set_blanked(False)
+        return was_blanked
 
     # ── lifecycle ────────────────────────────────────────────────────
 

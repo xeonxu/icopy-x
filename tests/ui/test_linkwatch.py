@@ -1,8 +1,9 @@
-"""Panel sleep follows the USB link, never the user's patience.
+"""Panel sleep follows the operator, not the network.
 
-Spec: after `usb_net_link_timeout` minutes without a USB host (gadget netdev
-present, carrier down) the backlight goes off; the next key press turns it back
-on. Nothing about the network is retried or reverted because of the timeout.
+Spec: after `usb_net_link_timeout` minutes without a key press, or without a USB
+host (gadget netdev present, carrier down), the backlight goes off; the next key
+press turns it back on. Plugging the cable in counts as activity too. Nothing
+about the network is retried or reverted because of the timeout.
 """
 
 import pytest
@@ -172,3 +173,58 @@ class _Recorder:
 
     def note_key(self):
         self.calls.append('note_key')
+
+
+class TestIdle:
+
+    def test_the_panel_blanks_with_the_host_still_attached(self):
+        """The ordinary case: the cable is in, the operator walked away."""
+        clock = Clock()
+        watcher, actions = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(59)
+        watcher.poll()
+        assert actions['blank'] == [], 'blanked before the timeout'
+        clock.advance(2)
+        watcher.poll()
+        assert watcher.blanked is True
+        assert len(actions['blank']) == 1
+
+    def test_a_key_press_restarts_the_idle_dwell(self):
+        clock = Clock()
+        watcher, actions = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(40)
+        watcher.note_key()
+        clock.advance(40)
+        watcher.poll()
+        assert watcher.blanked is False, 'the key press did not restart the dwell'
+        clock.advance(21)
+        watcher.poll()
+        assert watcher.blanked is True
+
+    def test_plugging_the_cable_in_wakes_a_dark_panel(self):
+        """A returning carrier is the operator acting, not a timer expiring."""
+        clock = Clock()
+        state = {'present': True}
+        watcher, actions = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(61)
+        watcher.poll()
+        assert watcher.blanked is True
+
+        state['present'] = False
+        watcher.present_source = lambda: state['present']
+        watcher.poll()
+        state['present'] = True
+        watcher.poll()
+        assert watcher.blanked is False
+        assert len(actions['unblank']) == 1
+
+    def test_zero_timeout_never_blanks_an_idle_panel(self):
+        clock = Clock()
+        watcher, actions = _watch(clock, present=True, timeout=lambda: 0)
+        watcher.poll()
+        clock.advance(10 ** 5)
+        watcher.poll()
+        assert watcher.blanked is False
