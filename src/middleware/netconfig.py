@@ -70,6 +70,24 @@ LEASE_TIME = '12h'
 # Fixed-last-octet values the Client role offers. 0 means "take what is offered".
 FIXED_OCTETS = (0, 2, 10, 20, 50)
 
+# In the Client role the subnet is not ours to choose, but the host's sharing
+# software uses a fixed range per operating system. Naming it lets the device ask
+# for its address on the first try instead of learning the subnet from a lease.
+# 0 keeps whatever the upstream server hands out and is the only safe default.
+CLIENT_NETWORKS = {
+    0: ('auto', None),
+    1: ('win', '192.168.137.0'),   # Windows Internet Connection Sharing
+    2: ('mac', '192.168.2.0'),     # macOS Internet Sharing
+    3: ('linux', '10.42.0.0'),     # NetworkManager 'ipv4.method shared'
+}
+
+CLIENT_NETWORK_LABELS = {
+    0: 'Auto',
+    1: 'Windows',
+    2: 'macOS',
+    3: 'Linux',
+}
+
 # Compact status strings for the panel; the menu translates them.
 STATUS_NO_LEASE = 'no lease'
 STATUS_NO_LINK = 'no link'
@@ -78,6 +96,7 @@ DEFAULTS = {
     'role': ROLE_GATEWAY,
     'driver': DRIVER_RNDIS,
     'subnet': 0,
+    'client_network': 0,
     'fixed_octet': 2,
 }
 
@@ -94,6 +113,28 @@ def menu_label(driver):
         DRIVER_RNDIS: 'Linux + Windows',
         DRIVER_NCM: 'Linux + macOS + Windows',
     }.get(driver, 'Linux + Windows')
+
+
+def client_network_label(index):
+    """Panel label of a host-network preset (an OS name, or Auto)."""
+    return CLIENT_NETWORK_LABELS.get(index, CLIENT_NETWORK_LABELS[0])
+
+
+def client_network_range(index):
+    """'192.168.137.x'-style range, or None when the host decides."""
+    base = CLIENT_NETWORKS.get(index, CLIENT_NETWORKS[0])[1]
+    if base is None:
+        return None
+    return base.rsplit('.', 1)[0] + '.x'
+
+
+def preset_request(index, fixed_octet):
+    """Address to ask for first, when a host preset and an octet are both set."""
+    base = CLIENT_NETWORKS.get(index, CLIENT_NETWORKS[0])[1]
+    if base is None or not _valid_octet(fixed_octet) or fixed_octet == 0:
+        return None
+    net = ipaddress.ip_network('%s/24' % base, strict=False)
+    return str(net.network_address + fixed_octet)
 
 
 def device_ip(subnet):
@@ -128,7 +169,7 @@ def dnsmasq_args(subnet, interface='usb0'):
     ]
 
 
-def render_conf(role, driver, subnet, fixed_octet):
+def render_conf(role, driver, subnet, fixed_octet, client_network=0):
     """Text of ``/etc/icopy/rndis.conf``.
 
     The file is generated: the app is its only writer and the boot script reads
@@ -140,6 +181,8 @@ def render_conf(role, driver, subnet, fixed_octet):
         driver = DEFAULTS['driver']
     if subnet not in SUBNETS:
         subnet = DEFAULTS['subnet']
+    if client_network not in CLIENT_NETWORKS:
+        client_network = DEFAULTS['client_network']
     if not _valid_octet(fixed_octet):
         fixed_octet = DEFAULTS['fixed_octet']
 
@@ -152,6 +195,7 @@ def render_conf(role, driver, subnet, fixed_octet):
         'function=%s\n'
         'subnet=%s/%d\n'
         'device_ip=%s\n'
+        'client_network=%s\n'
         'pool_start=%s\n'
         'pool_end=%s\n'
         'lease=%s\n'
@@ -159,7 +203,8 @@ def render_conf(role, driver, subnet, fixed_octet):
         % ('gateway' if role == ROLE_GATEWAY else 'client',
            {DRIVER_ECM: 'ecm', DRIVER_RNDIS: 'rndis', DRIVER_NCM: 'ncm'}[driver],
            function_name(driver), base, prefix,
-           device_ip(subnet), first, last, LEASE_TIME, fixed_octet)
+           device_ip(subnet), CLIENT_NETWORKS[client_network][0],
+           first, last, LEASE_TIME, fixed_octet)
     )
 
 
@@ -185,6 +230,11 @@ def parse_conf(text):
             if value in ('ecm', 'rndis', 'ncm'):
                 conf['driver'] = {'ecm': DRIVER_ECM, 'rndis': DRIVER_RNDIS,
                                   'ncm': DRIVER_NCM}[value]
+        elif key == 'client_network':
+            for index, (name, _) in CLIENT_NETWORKS.items():
+                if value == name:
+                    conf['client_network'] = index
+                    break
         elif key == 'fixed_octet':
             try:
                 octet = int(value, 10)

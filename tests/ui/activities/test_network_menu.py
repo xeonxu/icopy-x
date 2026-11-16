@@ -15,6 +15,7 @@ Spec (docs/superpowers/specs/2026-11-15-usb-network-profiles-design.md):
 import pytest
 
 import actstack
+import resources
 from tests.ui.conftest import MockCanvas
 from _constants import KEY_UP, KEY_DOWN, KEY_OK, KEY_PWR
 
@@ -33,7 +34,7 @@ def state(monkeypatch):
     import settings
     import usbnet
 
-    values = {'role': 0, 'driver': 1, 'subnet': 0, 'octet': 2}
+    values = {'role': 0, 'driver': 1, 'subnet': 0, 'octet': 2, 'client_network': 0}
     calls = []
 
     monkeypatch.setattr(settings, 'getUsbNetRole', lambda: values['role'])
@@ -42,6 +43,9 @@ def state(monkeypatch):
     monkeypatch.setattr(settings, 'setUsbNetDriver', lambda v: values.update(driver=v))
     monkeypatch.setattr(settings, 'getUsbNetSubnet', lambda: values['subnet'])
     monkeypatch.setattr(settings, 'setUsbNetSubnet', lambda v: values.update(subnet=v))
+    monkeypatch.setattr(settings, 'getUsbNetClientNetwork', lambda: values['client_network'])
+    monkeypatch.setattr(settings, 'setUsbNetClientNetwork',
+                        lambda v: values.update(client_network=v))
     monkeypatch.setattr(settings, 'getUsbNetFixedOctet', lambda: values['octet'])
     monkeypatch.setattr(settings, 'setUsbNetFixedOctet', lambda v: values.update(octet=v))
 
@@ -49,8 +53,8 @@ def state(monkeypatch):
                         'msg': 'gateway on usb0'}}
     monkeypatch.setattr(usbnet, 'read_status', lambda *a, **k: dict(status['value']))
 
-    def apply(role, driver, subnet, octet, **kwargs):
-        calls.append((role, driver, subnet, octet))
+    def apply(role, driver, subnet, octet, client_network=0, **kwargs):
+        calls.append((role, driver, subnet, octet, client_network))
         return dict(status['value'])
 
     monkeypatch.setattr(usbnet, 'apply', apply)
@@ -111,7 +115,7 @@ def test_role_change_persists_and_applies_once(state):
     activity = _open()
     _press(activity, KEY_OK)
     assert state['values']['role'] == 1
-    assert state['calls'] == [(1, 1, 0, 2)]
+    assert state['calls'] == [(1, 1, 0, 2, 0)]
 
 
 def test_fixed_row_is_dimmed_and_inert_while_sharing(state):
@@ -128,14 +132,16 @@ def test_fixed_row_is_dimmed_and_inert_while_sharing(state):
     assert canvas.itemcget(label, 'fill') == DIM_TEXT_COLOR
 
 
-def test_subnet_row_is_dimmed_and_inert_while_borrowing(state):
+def test_range_row_is_live_in_both_roles(state):
+    """The row means different things per role, but it is never inert."""
+    from activity_main import NetworkActivity
+    gateway = _open()
+    assert gateway._is_enabled(gateway._ROW_SUBNET) is True
     state['values']['role'] = 1
-    activity = _open()
-    _press(activity, KEY_DOWN, KEY_DOWN, KEY_DOWN)
-    assert activity._selected == activity._ROW_SUBNET
-    _press(activity, KEY_OK)
-    assert state['calls'] == []
-    assert state['values']['subnet'] == 0
+    client = _open()
+    assert client._is_enabled(client._ROW_SUBNET) is True
+    assert client._is_enabled(client._ROW_FIXED) is True
+    assert gateway._is_enabled(gateway._ROW_FIXED) is False
 
 
 def test_fixed_octet_cycles_through_the_offered_values(state):
@@ -198,3 +204,36 @@ def test_labels_stay_inside_the_row():
             assert len(label) <= limit, (
                 '%s %s is %d characters, the row fits %d: %r'
                 % (code, key, len(label), limit, label))
+
+
+def test_range_row_names_the_hosts_range_for_each_operating_system(state):
+    state['values']['role'] = 1
+    state['status']['value'] = {'role': 'client', 'address': 'none',
+                                'msg': 'no lease - gateway fallback'}
+    activity = _open()
+    assert activity._subnet_label() == resources.get_str('net_fixed_auto')
+    _press(activity, KEY_DOWN, KEY_DOWN, KEY_DOWN)               # move to Range
+    assert activity._selected == activity._ROW_SUBNET
+    for label in ('Windows', 'macOS', 'Linux'):
+        _press(activity, KEY_OK)
+        assert activity._subnet_label() == label
+        assert state['values']['client_network'] in (1, 2, 3)
+    _press(activity, KEY_OK)
+    assert activity._subnet_label() == resources.get_str('net_fixed_auto')
+    assert state['values']['client_network'] == 0
+
+
+def test_range_row_shows_the_acquired_address_on_auto(state):
+    state['values']['role'] = 1
+    state['status']['value'] = {'role': 'client', 'address': '192.168.137.2/24',
+                                'msg': 'lease 192.168.137.2'}
+    activity = _open()
+    assert activity._subnet_label() == '192.168.137.2/24'
+
+
+def test_gateway_range_does_not_touch_the_client_network(state):
+    activity = _open()
+    _press(activity, KEY_DOWN, KEY_DOWN, KEY_DOWN, KEY_OK)       # Range row
+    assert state['values']['subnet'] == 1
+    assert state['values']['client_network'] == 0
+    assert activity._subnet_label() == '192.168.7.x'

@@ -27,6 +27,7 @@ exit 0
 """
 
 FAKE_UDHCPC = """#!/bin/sh
+echo "$*" >> "$FAKE_STATE/udhcpc.calls"
 req=""; prev=""
 for a in "$@"; do
     [ "$prev" = "-r" ] && req=$a
@@ -121,3 +122,38 @@ def test_a_previous_gateway_address_is_not_mistaken_for_a_lease(tmp_path):
     assert 'fallback' in result['msg']
     calls = (tmp_path / 'state' / 'ip.calls').read_text()
     assert 'flush' in calls, 'the interface must start without a stale address' 
+
+
+def _calls(tmp_path):
+    path = tmp_path / 'state' / 'udhcpc.calls'
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def test_a_named_host_subnet_is_requested_on_the_first_try(tmp_path):
+    """Naming the host OS saves a lease: the address is asked for directly."""
+    result = _run(tmp_path, conf='driver=rndis\nclient_network=win\nfixed_octet=2\n',
+                  FAKE_OFFER='10.0.0.9')
+    assert result['address'] == '192.168.137.2/24'
+    assert result['msg'] == 'lease 192.168.137.2'
+    first = _calls(tmp_path)[0]
+    assert '-r 192.168.137.2' in first, first
+    assert '-b' not in first
+
+
+def test_a_refused_request_falls_back_to_learning_the_subnet(tmp_path):
+    result = _run(tmp_path, conf='driver=rndis\nclient_network=mac\nfixed_octet=10\n',
+                  FAKE_OFFER='192.168.2.77', FAKE_IGNORE_REQUEST='1')
+    assert result['address'] == '192.168.2.77/24'
+    assert result['msg'] == 'requested 192.168.2.10 ignored'
+    calls = _calls(tmp_path)
+    assert '-r 192.168.2.10' in calls[0]
+    assert len([c for c in calls if '-b' not in c]) >= 2, calls
+
+
+def test_auto_keeps_learning_and_never_presumes_a_subnet(tmp_path):
+    """Auto spends the first lease learning; the octet follows what it learned."""
+    result = _run(tmp_path, conf='driver=rndis\nclient_network=auto\nfixed_octet=2\n',
+                  FAKE_OFFER='10.42.0.57')
+    assert '-r' not in _calls(tmp_path)[0], 'Auto guessed a subnet instead of learning it'
+    assert result['address'] == '10.42.0.2/24'
+    assert result['msg'] == 'lease 10.42.0.2'

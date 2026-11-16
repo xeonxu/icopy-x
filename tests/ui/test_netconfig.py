@@ -53,7 +53,7 @@ def test_render_conf_round_trips():
     assert 'function=ecm.usb0' in text and 'fixed_octet=2' in text
     conf = netconfig.parse_conf(text)
     assert conf == {'role': netconfig.ROLE_CLIENT, 'driver': netconfig.DRIVER_ECM,
-                    'subnet': 0, 'fixed_octet': 2}
+                    'subnet': 0, 'client_network': 0, 'fixed_octet': 2}
 
 
 def test_parse_conf_falls_back_to_defaults():
@@ -86,3 +86,35 @@ def test_subnet_conflict_detection():
     assert netconfig.subnet_conflicts(0, ['192.168.1.0/24', '172.16.0.0/24']) is False
     assert netconfig.subnet_conflicts(2, ['172.16.0.0/12']) is True
     assert netconfig.subnet_conflicts(0, []) is False
+
+
+class TestClientNetworkPresets:
+    """The Client role names the host's range; it never chooses one."""
+
+    def test_defaults_take_whatever_the_host_offers(self):
+        assert netconfig.DEFAULTS['client_network'] == 0
+        assert netconfig.client_network_label(0) == 'Auto'
+        assert netconfig.client_network_range(0) is None
+
+    def test_each_operating_system_has_its_sharing_range(self):
+        assert netconfig.client_network_range(1) == '192.168.137.x'
+        assert netconfig.client_network_range(2) == '192.168.2.x'
+        assert netconfig.client_network_range(3) == '10.42.0.x'
+
+    def test_a_preset_turns_into_an_address_to_ask_for(self):
+        assert netconfig.preset_request(1, 2) == '192.168.137.2'
+        assert netconfig.preset_request(2, 10) == '192.168.2.10'
+        assert netconfig.preset_request(3, 50) == '10.42.0.50'
+
+    def test_auto_or_an_unset_octet_asks_for_nothing(self):
+        assert netconfig.preset_request(0, 2) is None
+        assert netconfig.preset_request(1, 0) is None
+
+    def test_the_conf_carries_the_choice(self):
+        text = netconfig.render_conf(1, 1, 0, 2, client_network=2)
+        assert 'client_network=mac' in text
+        assert netconfig.parse_conf(text)['client_network'] == 2
+
+    def test_an_unknown_preset_falls_back_to_auto(self):
+        text = netconfig.render_conf(1, 1, 0, 2, client_network=9)
+        assert 'client_network=auto' in text

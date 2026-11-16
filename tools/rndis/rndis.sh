@@ -31,7 +31,7 @@ if [ -r "$CONF" ]; then
             ''|\#*) continue ;;
         esac
         case "$key" in
-            driver|role|subnet|device_ip|pool_start|pool_end|lease|fixed_octet)
+            driver|role|subnet|device_ip|client_network|pool_start|pool_end|lease|fixed_octet)
                 eval "$key=\$value" ;;
         esac
     done < "$CONF"

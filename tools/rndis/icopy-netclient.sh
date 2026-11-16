@@ -21,11 +21,14 @@ NET_SYSFS=${ICOPY_NET_SYSFS:-/sys/class/net}
 
 driver=rndis
 fixed_octet=2
+client_network=auto
 if [ -r "$CONF" ]; then
     driver=$(sed -n 's/^driver=//p' "$CONF" | tail -1)
     fixed_octet=$(sed -n 's/^fixed_octet=//p' "$CONF" | tail -1)
+    client_network=$(sed -n 's/^client_network=//p' "$CONF" | tail -1)
 fi
 case "$driver" in ecm|rndis|ncm) ;; *) driver=rndis ;; esac
+case "$client_network" in auto|win|mac|linux) ;; *) client_network=auto ;; esac
 case "$fixed_octet" in ''|*[!0-9]*) fixed_octet=2 ;; esac
 [ "$fixed_octet" = "0" ] && fixed_octet=""
 
@@ -62,26 +65,55 @@ if [ ! -e "$NET_SYSFS/$IFACE" ]; then
     exit 1
 fi
 
-# 1. any lease at all, so we can learn the host's subnet.
 # The address must come from the DHCP client: an address left over from the
 # gateway role would otherwise look like a lease.
 ip addr flush dev "$IFACE" 2>/dev/null || true
-lease
-rc=$?
-granted=$(address)
-if [ "$rc" -ne 0 ] || [ -z "$granted" ]; then
-    write_status "none" "no lease - gateway fallback"
-    for pid in $(pgrep -f "udhcpc -i $IFACE" 2>/dev/null); do
-        kill "$pid" 2>/dev/null
-    done
-    export ICOPY_NET_ROLE=gateway
-    export ICOPY_NET_MSG="no lease - gateway fallback"
-    exec sh "$RNDIS_SCRIPT"
+
+# Host networks this device is told to expect. Windows ICS, macOS sharing and
+# NetworkManager each use a fixed range, so naming the host lets us ask for the
+# final address on the first try instead of spending a lease just to learn the
+# subnet. Servers are free to refuse; then the learn path takes over.
+preset_base=""
+case "$client_network" in
+    win)   preset_base=192.168.137.0 ;;
+    mac)   preset_base=192.168.2.0 ;;
+    linux) preset_base=10.42.0.0 ;;
+esac
+
+granted=""
+msg="lease from host"
+if [ -n "$preset_base" ] && [ -n "$fixed_octet" ]; then
+    want=$(echo "$preset_base" | awk -F. -v o="$fixed_octet" '{
+        printf "%s.%s.%s.%d", $1, $2, $3, o
+    }')
+    lease -r "$want"
+    now=$(address)
+    if [ "$now" = "$want" ]; then
+        granted=$now
+        msg="lease $want"
+    else
+        ip addr flush dev "$IFACE" 2>/dev/null || true
+    fi
 fi
 
-msg="lease from host"
+# 1. any lease at all, so we can learn the host's subnet.
+if [ -z "$granted" ]; then
+    lease
+    rc=$?
+    granted=$(address)
+    if [ "$rc" -ne 0 ] || [ -z "$granted" ]; then
+        write_status "none" "no lease - gateway fallback"
+        for pid in $(pgrep -f "udhcpc -i $IFACE" 2>/dev/null); do
+            kill "$pid" 2>/dev/null
+        done
+        export ICOPY_NET_ROLE=gateway
+        export ICOPY_NET_MSG="no lease - gateway fallback"
+        exec sh "$RNDIS_SCRIPT"
+    fi
+fi
+
 # 2. ask for the fixed last octet inside the subnet we just learned
-if [ -n "$fixed_octet" ]; then
+if [ -n "$fixed_octet" ] && [ "${msg#lease }" != "${want:-}" ]; then
     bits=$(prefix)
     [ -n "$bits" ] || bits=24
     want=$(echo "$granted" | awk -F. -v o="$fixed_octet" -v b="$bits" '{

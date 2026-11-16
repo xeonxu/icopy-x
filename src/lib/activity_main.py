@@ -805,7 +805,10 @@ class NetworkActivity(BaseActivity):
                   serve; never by the USB class name.
         Fixed IP  Client only: Auto, or the last octet of the address to ask
                   for (.2 / .10 / .20 / .50).
-        Subnet    Gateway only: the address range handed out by our own DHCP.
+        Range     Gateway: the address range our own DHCP hands out. Client:
+                  the host's preset per operating system (Windows, macOS,
+                  Linux) or Auto, which shows the address actually acquired.
+                  The row is live in both roles; only its meaning changes.
         Status    read-only, from /run/icopy-net.status.
 
     Rows the current role makes irrelevant are drawn dimmed and refuse OK
@@ -831,6 +834,7 @@ class NetworkActivity(BaseActivity):
         self._role = 0
         self._driver = 1
         self._subnet = 0
+        self._client_network = 0
         self._octet = 2
         self._status = {}
         self._applying = False
@@ -844,6 +848,7 @@ class NetworkActivity(BaseActivity):
             self._role = _settings.getUsbNetRole()
             self._driver = _settings.getUsbNetDriver()
             self._subnet = _settings.getUsbNetSubnet()
+            self._client_network = _settings.getUsbNetClientNetwork()
             self._octet = _settings.getUsbNetFixedOctet()
         except Exception:
             pass
@@ -878,8 +883,6 @@ class NetworkActivity(BaseActivity):
         """Rows that the other role makes irrelevant refuse input."""
         if row == self._ROW_FIXED:
             return self._role == 1  # Client
-        if row == self._ROW_SUBNET:
-            return self._role == 0  # Gateway
         if row == self._ROW_STATUS:
             return False
         return True
@@ -896,10 +899,23 @@ class NetworkActivity(BaseActivity):
         return '.%d' % self._octet
 
     def _subnet_label(self):
-        try:
-            base = self._netconfig().SUBNETS.get(self._subnet, ('10.1.1.0', 24))[0]
-        except Exception:
-            base = '10.1.1.0'
+        """Range row: ours to choose as a Gateway, the host's as a Client.
+
+        In the Client role the subnet belongs to the host's sharing software, so
+        the row names the operating system whose preset is used — Windows,
+        macOS and Linux each have a fixed range. On Auto the row shows the
+        address the host actually handed out, because there is no preset to
+        name.
+        """
+        netconfig = self._netconfig()
+        if self._role == 1:
+            if self._client_network == 0:
+                address = (self._status or {}).get('address', '')
+                if address and address != 'none':
+                    return address
+                return resources.get_str('net_fixed_auto')
+            return netconfig.client_network_label(self._client_network)
+        base = netconfig.SUBNETS.get(self._subnet, ('10.1.1.0', 24))[0]
         return base.rsplit('.', 1)[0] + '.x'
 
     def _status_label(self):
@@ -984,7 +1000,12 @@ class NetworkActivity(BaseActivity):
             octets = getattr(netconfig, 'FIXED_OCTETS', (0, 2, 10, 20, 50))
             self._octet = self._cycle(octets, self._octet)
         elif row == self._ROW_SUBNET:
-            self._subnet = self._cycle((0, 1, 2), self._subnet)
+            if self._role == 1:
+                self._client_network = self._cycle(
+                    tuple(getattr(netconfig, 'CLIENT_NETWORKS', (0, 1, 2, 3))),
+                    self._client_network)
+            else:
+                self._subnet = self._cycle((0, 1, 2), self._subnet)
         else:
             return
 
@@ -997,6 +1018,7 @@ class NetworkActivity(BaseActivity):
             _settings.setUsbNetRole(self._role)
             _settings.setUsbNetDriver(self._driver)
             _settings.setUsbNetSubnet(self._subnet)
+            _settings.setUsbNetClientNetwork(self._client_network)
             _settings.setUsbNetFixedOctet(self._octet)
         except Exception:
             pass
@@ -1020,7 +1042,8 @@ class NetworkActivity(BaseActivity):
         try:
             import usbnet
             self._status = usbnet.apply(
-                self._role, self._driver, self._subnet, self._octet)
+                self._role, self._driver, self._subnet, self._octet,
+                self._client_network)
         except Exception:
             self._status = self._read_status()
 

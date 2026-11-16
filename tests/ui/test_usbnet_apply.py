@@ -54,10 +54,11 @@ class TestSettingsAccessors:
         settings.setUsbNetRole(netconfig.ROLE_CLIENT)
         settings.setUsbNetDriver(netconfig.DRIVER_NCM)
         settings.setUsbNetSubnet(2)
+        settings.setUsbNetClientNetwork(2)
         settings.setUsbNetFixedOctet(50)
         settings.setUsbNetLinkTimeout(5)
         assert settings.usbNetwork() == {'role': 1, 'driver': 2, 'subnet': 2,
-                                         'fixed_octet': 50}
+                                         'client_network': 2, 'fixed_octet': 50}
         assert settings.getUsbNetLinkTimeout() == 5
 
 

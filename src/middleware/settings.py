@@ -262,6 +262,15 @@ def setUsbNetSubnet(value):
     config.setKeyValue('usb_net_subnet', str(int(value)))
 
 
+def getUsbNetClientNetwork():
+    """Client role: which host OS preset to ask on (0 = take what is offered)."""
+    return _get_int('usb_net_client_network', 0, (0, 1, 2, 3))
+
+
+def setUsbNetClientNetwork(value):
+    config.setKeyValue('usb_net_client_network', str(int(value)))
+
+
 def getUsbNetFixedOctet():
     """Client role: last octet to request, 0 = take whatever the host offers."""
     return _get_int('usb_net_fixed_octet', 2)
@@ -286,5 +295,6 @@ def usbNetwork():
         'role': getUsbNetRole(),
         'driver': getUsbNetDriver(),
         'subnet': getUsbNetSubnet(),
+        'client_network': getUsbNetClientNetwork(),
         'fixed_octet': getUsbNetFixedOctet(),
     }

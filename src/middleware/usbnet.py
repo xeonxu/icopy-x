@@ -38,14 +38,14 @@ SERVICE = 'rndis.service'
 RESTART_TIMEOUT = 30
 
 
-def write_conf(role, driver, subnet, fixed_octet, path=None):
+def write_conf(role, driver, subnet, fixed_octet, client_network=0, path=None):
     """Write ``rndis.conf`` atomically; the boot script tolerates 0-byte files.
 
     A reader must never observe a half-written file, so the text goes to a
     sibling and is renamed over the target.
     """
     path = path or CONF_PATH
-    text = netconfig.render_conf(role, driver, subnet, fixed_octet)
+    text = netconfig.render_conf(role, driver, subnet, fixed_octet, client_network)
     directory = os.path.dirname(path)
     if directory and not os.path.isdir(directory):
         os.makedirs(directory)
@@ -68,13 +68,13 @@ def read_status(path=None):
         return {}
 
 
-def apply(role, driver, subnet, fixed_octet, path=None, runner=None):
+def apply(role, driver, subnet, fixed_octet, client_network=0, path=None, runner=None):
     """Persist the profile and re-apply it live, then report the new status.
 
     Restarting the unit never requires a reboot: measured on hardware, the link
     re-enumerates and the host re-leases within seconds.
     """
-    write_conf(role, driver, subnet, fixed_octet, path=path)
+    write_conf(role, driver, subnet, fixed_octet, client_network, path=path)
     run = runner or subprocess.run
     try:
         run(['systemctl', 'restart', SERVICE], timeout=RESTART_TIMEOUT)
