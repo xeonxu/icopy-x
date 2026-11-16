@@ -94,6 +94,7 @@ class StringEN:
         'forceuse': 'Force-Use',
         'clear': 'Clear',
         'shutdown': 'Shutdown',
+        'reboot': 'Reboot',
         'yes': 'Yes',
         'no': 'No',
         'fail': 'Fail',

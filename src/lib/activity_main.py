@@ -463,6 +463,13 @@ class SettingsMenuActivity(BaseActivity):
                            right; OK toggles it in place.
         Language         — label on the left, active language name on the
                            right; OK opens LanguageActivity to pick one.
+        Shutdown         — OK powers the device off.
+        Reboot           — OK restarts the device.
+
+    Five rows fit between the title bar and the bottom edge; a build with more
+    rows shows a window of five that follows the selection, so no row is ever
+    drawn over the title or off the panel. The title carries "current/total"
+    so the operator can tell there is another page.
 
     UP/DOWN move the selection between rows, OK acts on the current row,
     PWR exits.  Uses res/img/enabled.png and res/img/disabled.png for the
@@ -479,7 +486,19 @@ class SettingsMenuActivity(BaseActivity):
     # Row indices
     _ROW_MIRROR = 0
     _ROW_LANGUAGE = 1
-    _ROW_COUNT = 2
+    _ROW_SHUTDOWN = 2
+    _ROW_REBOOT = 3
+    _ROW_COUNT = 4
+
+    # Rows that fit between the title bar and the bottom edge.
+    _VISIBLE_ROWS = 5
+
+    _LABEL_KEYS = {
+        _ROW_MIRROR: 'screen_mirroring',
+        _ROW_LANGUAGE: 'language',
+        _ROW_SHUTDOWN: 'shutdown',
+        _ROW_REBOOT: 'reboot',
+    }
 
     def __init__(self, bundle=None):
         self._mirror_state = False
@@ -523,9 +542,16 @@ class SettingsMenuActivity(BaseActivity):
         if self.getCanvas() is not None:
             self._render()
 
-    def _row_center_y(self, row):
-        """Vertical centre of *row* within the content area."""
-        return CONTENT_Y0 + row * LIST_ITEM_H + LIST_ITEM_H // 2
+    def _visible_start(self):
+        """First row of the window, kept so the selection stays on the panel."""
+        if self._selected < self._VISIBLE_ROWS:
+            return 0
+        last_start = max(0, self._ROW_COUNT - self._VISIBLE_ROWS)
+        return min(self._selected - self._VISIBLE_ROWS + 1, last_start)
+
+    def _row_center_y(self, visible_index):
+        """Vertical centre of the *visible_index*-th row in the window."""
+        return CONTENT_Y0 + visible_index * LIST_ITEM_H + LIST_ITEM_H // 2
 
     def _current_language_name(self):
         """Human-readable name of the active language (falls back to code)."""
@@ -535,8 +561,14 @@ class SettingsMenuActivity(BaseActivity):
                 return entry.get('name', code)
         return code
 
+    def _value(self, row):
+        """Right-hand text of a row; the mirror row draws an icon instead."""
+        if row == self._ROW_LANGUAGE:
+            return self._current_language_name()
+        return ''
+
     def _render(self):
-        """(Re)draw the title and both settings rows."""
+        """(Re)draw the title and the visible rows."""
         canvas = self.getCanvas()
         if canvas is None:
             return
@@ -549,8 +581,10 @@ class SettingsMenuActivity(BaseActivity):
         canvas.delete('settings_row')
         canvas.delete('settings_toggle')
 
+        start = self._visible_start()
+
         # Selection highlight behind the active row
-        row_y0 = CONTENT_Y0 + self._selected * LIST_ITEM_H
+        row_y0 = CONTENT_Y0 + (self._selected - start) * LIST_ITEM_H
         canvas.create_rectangle(
             0, row_y0,
             SCREEN_W, row_y0 + LIST_ITEM_H,
@@ -559,49 +593,42 @@ class SettingsMenuActivity(BaseActivity):
             tags='settings_row',
         )
 
-        # Row labels (left side)
-        canvas.create_text(
-            15, self._row_center_y(self._ROW_MIRROR),
-            text=resources.get_str('screen_mirroring'),
-            fill=NORMAL_TEXT_COLOR,
-            font=resources.get_font(14),
-            anchor='w',
-            tags='settings_row',
-        )
-        canvas.create_text(
-            15, self._row_center_y(self._ROW_LANGUAGE),
-            text=resources.get_str('language'),
-            fill=NORMAL_TEXT_COLOR,
-            font=resources.get_font(14),
-            anchor='w',
-            tags='settings_row',
-        )
+        for row in range(start, min(start + self._VISIBLE_ROWS, self._ROW_COUNT)):
+            y = self._row_center_y(row - start)
+            canvas.create_text(
+                15, y,
+                text=resources.get_str(self._LABEL_KEYS[row]),
+                fill=NORMAL_TEXT_COLOR,
+                font=resources.get_font(14),
+                anchor='w',
+                tags='settings_row',
+            )
+            value = self._value(row)
+            if value:
+                canvas.create_text(
+                    SCREEN_W - 15, y,
+                    text=value,
+                    fill=NORMAL_TEXT_COLOR,
+                    font=resources.get_font(14),
+                    anchor='e',
+                    tags='settings_row',
+                )
 
-        # Language value (right side)
-        canvas.create_text(
-            SCREEN_W - 15, self._row_center_y(self._ROW_LANGUAGE),
-            text=self._current_language_name(),
-            fill=NORMAL_TEXT_COLOR,
-            font=resources.get_font(14),
-            anchor='e',
-            tags='settings_row',
-        )
+        self._draw_toggle(start)
 
-        # Mirror toggle icon (right side)
-        self._draw_toggle()
-
-    def _draw_toggle(self):
-        """Draw the mirror toggle icon based on current state."""
+    def _draw_toggle(self, start=0):
+        """Draw the mirror toggle icon when its row is inside the window."""
         canvas = self.getCanvas()
         if canvas is None:
             return
         canvas.delete('settings_toggle')
+        if not 0 <= self._ROW_MIRROR - start < self._VISIBLE_ROWS:
+            return
         self._tk_img = self._load_toggle_image(self._mirror_state)
         if self._tk_img is not None:
-            toggle_x = SCREEN_W - 15
-            toggle_y = self._row_center_y(self._ROW_MIRROR)
             canvas.create_image(
-                toggle_x, toggle_y,
+                SCREEN_W - 15,
+                self._row_center_y(self._ROW_MIRROR - start),
                 image=self._tk_img,
                 anchor='e',
                 tags='settings_toggle',
@@ -615,7 +642,15 @@ class SettingsMenuActivity(BaseActivity):
             _settings.setScreenMirror(1 if self._mirror_state else 0)
         except Exception:
             pass
-        self._draw_toggle()
+        self._draw_toggle(self._visible_start())
+
+    def _power(self, action):
+        """Shut the device down or restart it; the menu row is the confirmation."""
+        try:
+            import power
+            getattr(power, action)()
+        except Exception:
+            pass
 
     def onKeyEvent(self, key):
         if key == KEY_UP:
@@ -631,6 +666,10 @@ class SettingsMenuActivity(BaseActivity):
                 self._toggle_mirror()
             elif self._selected == self._ROW_LANGUAGE:
                 actstack.start_activity(LanguageActivity)
+            elif self._selected == self._ROW_SHUTDOWN:
+                self._power('shutdown')
+            elif self._selected == self._ROW_REBOOT:
+                self._power('reboot')
         elif key == KEY_PWR:
             if self._handlePWR():
                 return
