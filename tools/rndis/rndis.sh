@@ -37,6 +37,11 @@ if [ -r "$CONF" ]; then
     done < "$CONF"
 fi
 
+# The client role falls back here when no host answers, without touching the
+# persisted choice, and passes the reason it wants recorded.
+[ -n "${ICOPY_NET_ROLE:-}" ] && role=$ICOPY_NET_ROLE
+STATUS_MSG=${ICOPY_NET_MSG:-}
+
 case "$driver" in
     ecm)  FUNCTION=ecm.usb0 ;  PRODUCT='iCopy-X ECM'  ;  NEEDS_OS_DESC=0 ;;
     ncm)  FUNCTION=ncm.usb0 ;  PRODUCT='iCopy-X NCM'  ;  NEEDS_OS_DESC=0 ;;
@@ -160,7 +165,7 @@ if [ "$role" = "client" ]; then
     # No DHCP server: the host's internet sharing gives us the address.
     systemctl --no-block stop rndis-dhcp.service >/dev/null 2>&1 || true
     systemctl --no-block restart icopy-net.service >/dev/null 2>&1 || true
-    status "pending" "asking the host for a lease"
+    status "pending" "${STATUS_MSG:-asking the host for a lease}"
     echo "USB network: $driver in client role on $NETDEV"
     exit 0
 fi
@@ -192,5 +197,5 @@ ip addr add "$device_ip/$prefix" dev "$NETDEV" 2>/dev/null || true
 systemctl --no-block restart rndis-dhcp.service >/dev/null 2>&1 || true
 
 address=$(ip -4 addr show "$NETDEV" 2>/dev/null | awk '/inet /{print $2; exit}')
-status "${address:-none}" "gateway on $NETDEV"
+status "${address:-none}" "${STATUS_MSG:-gateway on $NETDEV}"
 echo "USB network: $driver gateway, $NETDEV ${address:-no address}, udc=$(cat /sys/class/udc/musb-hdrc.4.auto/state 2>/dev/null)"

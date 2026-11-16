@@ -1,0 +1,13 @@
+#!/bin/sh
+# udhcpc hook for the client role: keep /run/icopy-net.status honest so a
+# renewal that changes the address is visible on the panel.
+STATUS=/run/icopy-net.status
+[ -f "$STATUS" ] || exit 0
+case "$1" in
+    bound|renew)
+        [ -n "${ip:-}" ] || exit 0
+        sed -i "s|^address=.*|address=$ip/${subnet:-24}|" "$STATUS" 2>/dev/null
+        sed -i "s|^ts=.*|ts=$(date +%s)|" "$STATUS" 2>/dev/null
+        ;;
+esac
+exit 0

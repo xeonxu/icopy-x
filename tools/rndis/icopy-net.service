@@ -1,0 +1,15 @@
+[Unit]
+Description=Client-role DHCP lease for the iCopy-X USB link
+After=rndis.service
+Wants=rndis.service
+ConditionPathExists=/etc/icopy/rndis.conf
+
+[Service]
+# Runs the two-step acquisition once; the udhcpc daemon it starts keeps the lease
+# renewed inside this unit's cgroup, so a restart of the unit cleans it up.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/icopy-netclient
+
+[Install]
+WantedBy=multi-user.target

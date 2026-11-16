@@ -27,12 +27,17 @@ $SCP "$DIR/rndis.sh" "$HOST:/home/pi/rndis.sh"
 $SCP "$DIR/rndis.service" "$DIR/rndis-dhcp.service" "$DIR/icopy-postpatch.service" \
      "$HOST:/etc/systemd/system/"
 $SCP "$DIR/patch_stock_ipk.py" "$HOST:/usr/local/sbin/icopy_postpatch.py"
+$SCP "$DIR/icopy-netclient.sh" "$HOST:/usr/local/sbin/icopy-netclient"
+$SCP "$DIR/icopy-net.service" "$HOST:/etc/systemd/system/"
+$SSH "$HOST" 'mkdir -p /etc/icopy'
+$SCP "$DIR/udhcpc.script" "$HOST:/etc/icopy/udhcpc.script"
 
 echo "=== enabling services"
 $SSH "$HOST" '
-  chmod +x /home/pi/rndis.sh /usr/local/sbin/icopy_postpatch.py
+  chmod +x /home/pi/rndis.sh /usr/local/sbin/icopy_postpatch.py \
+           /usr/local/sbin/icopy-netclient /etc/icopy/udhcpc.script
   systemctl daemon-reload
-  systemctl enable rndis.service rndis-dhcp.service icopy-postpatch.service
+  systemctl enable rndis.service rndis-dhcp.service icopy-net.service icopy-postpatch.service
   systemctl restart rndis.service
   systemctl restart rndis-dhcp.service
   systemctl start icopy-postpatch.service
