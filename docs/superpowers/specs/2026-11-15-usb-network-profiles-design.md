@@ -169,14 +169,19 @@ after about a second while the footer shows `applying…`. `PWR` leaves without
 changes. Rows that the current role makes irrelevant are drawn dimmed and
 refuse input rather than being hidden, so the layout never jumps.
 
-A driver or role change re-enumerates the USB device, and **Windows does not
-recover from that by itself**: after a rebuild the RNDIS function instance sits
-at `CM_PROB_FAILED_START` and the link stays dead — observed twice on
-2026-11-15, and a cable re-plug did not clear it while a device reboot did. The
-menu therefore only *persists* the choice and prompts `Restart to apply`; the
-switch happens on the next boot, when `rndis.service` builds the new gadget from
-a clean configfs. That is why the Shutdown/Reboot menu entries are a
-prerequisite for this feature rather than a separate nicety.
+A driver or role change re-enumerates the USB device and drops any session over
+`usb0` for a few seconds. **No reboot is needed**: measured on 2026-11-15,
+`RNDIS → ECM → RNDIS` came back with the same device identity, the same lease
+(`10.1.1.102`) and a working `ping 10.1.1.1` within 25 s, without touching the
+cable. The menu therefore applies the change immediately by restarting
+`rndis.service`, shows `applying…` while the link re-enumerates, and reads the
+new state back from `/run/icopy-net.status`.
+
+The earlier failures that suggested a reboot were artefacts of the NCM trials:
+a leftover function in the config produced a malformed composite, and Windows
+then left the RNDIS function instance at `CM_PROB_FAILED_START`. The rebuild
+therefore tears down **every** function and symlink, not just the one it knows
+about.
 
 ### Link timeout and the panel backlight
 
@@ -246,7 +251,8 @@ Device verification (iCopy-X HW 1.7):
 | `Client` on NM `shared` | Same in `10.42.0.0/24` |
 | `Client` with sharing off | 30 s, then gateway fallback, link reachable again |
 | RNDIS profile after a reboot | Binds, `10.1.1.102` lease, SSH and TCP mirror work (observed repeatedly) |
-| A profile switch | The choice persists, nothing is rebuilt live, the new gadget appears on the next boot |
+| Live switch, gateway role (2026-11-15) | A defaults → `rndis.usb0`, `10.1.1.1/24`; B `driver=ecm` → `ecm.usb0` only, address and dnsmasq up; C back to defaults → `rndis.usb0`, host re-leased `10.1.1.102`, ping OK. No reboot, no cable touch, ~5 s per switch |
+| NCM profile build | `ncm.usb0`, product `iCopy-X NCM`, address and DHCP server up; Windows shows no adapter, which is the documented limitation |
 | `macOS` + ECM | On Linux (`cdc_ether`) the link enumerates; on macOS a Network service appears and Internet Sharing reaches the device — **requires a Mac, not available here** |
 | Switch back | RNDIS profile restores with no reboot; PC mode round trip still hands the UDC back and returns it |
 
