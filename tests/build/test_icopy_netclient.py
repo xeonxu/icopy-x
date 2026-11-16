@@ -27,7 +27,11 @@ exit 0
 """
 
 FAKE_UDHCPC = """#!/bin/sh
-echo "$*" >> "$FAKE_STATE/udhcpc.calls"
+echo "$(date +%s%N) $*" >> "$FAKE_STATE/udhcpc.calls"
+n=$(wc -l < "$FAKE_STATE/udhcpc.calls")
+if [ -n "${FAKE_FAIL_FIRST:-}" ] && [ "$n" -le "$FAKE_FAIL_FIRST" ]; then
+    exit 1
+fi
 req=""; prev=""
 for a in "$@"; do
     [ "$prev" = "-r" ] && req=$a
@@ -66,6 +70,11 @@ def _env(tmp_path, **extra):
         'ICOPY_UDHCPC_HOOK': str(tmp_path / 'hook.sh'),
         'ICOPY_RNDIS_SCRIPT': str(tmp_path / 'fallback.sh'),
         'ICOPY_NET_SYSFS': str(sysfs),
+        'ICOPY_UDC': str(tmp_path / 'udc'),
+        # The window is real time; keep it short so a failing case costs a test
+        # a couple of seconds instead of half a minute.
+        'ICOPY_NET_DEADLINE': '2',
+        'ICOPY_NET_RETRY_SLEEP': '1',
     })
     env.update({k: v for k, v in extra.items() if v is not None})
     return env, status
@@ -157,3 +166,45 @@ def test_auto_keeps_learning_and_never_presumes_a_subnet(tmp_path):
     assert '-r' not in _calls(tmp_path)[0], 'Auto guessed a subnet instead of learning it'
     assert result['address'] == '10.42.0.2/24'
     assert result['msg'] == 'lease 10.42.0.2'
+
+
+def test_a_host_that_answers_late_still_gets_a_lease(tmp_path):
+    """The host's sharing DHCP server restarts with the gadget: be patient.
+
+    One attempt per switch is not enough — the adapter instance the host sees is
+    new, so the first few DISCOVERs go unanswered by design.
+    """
+    result = _run(tmp_path, conf='driver=rndis\nfixed_octet=2\n',
+                  FAKE_OFFER='10.42.0.57', FAKE_FAIL_FIRST='2',
+                  ICOPY_NET_DEADLINE='6', ICOPY_NET_RETRY_SLEEP='0')
+    assert result['address'] == '10.42.0.2/24', result
+    assert len(_calls(tmp_path)) >= 3, _calls(tmp_path)
+
+
+def test_silence_is_decided_over_a_window_not_by_one_attempt(tmp_path):
+    """No host at all: keep asking until the deadline, then fall back."""
+    env, status = _env(tmp_path, conf='driver=rndis\nfixed_octet=0\n', FAKE_RC='1',
+                       ICOPY_NET_DEADLINE='3', ICOPY_NET_RETRY_SLEEP='0')
+    subprocess.run(['sh', str(SCRIPT), 'usb0'], env=env, cwd=str(tmp_path),
+                   capture_output=True, timeout=60)
+    assert len(_calls(tmp_path)) >= 2, _calls(tmp_path)
+    result = dict(line.split('=', 1) for line in status.read_text().splitlines() if '=' in line)
+    assert 'fallback' in result['msg']
+
+
+def test_no_lease_is_asked_for_before_the_gadget_is_bound(tmp_path):
+    """An unbound gadget has no host-facing interface; asking would waste the window."""
+    import threading
+    import time
+
+    env, _ = _env(tmp_path, conf='driver=rndis\nfixed_octet=0\n', FAKE_OFFER='10.42.0.57')
+    udc = pathlib.Path(env['ICOPY_UDC'])
+    udc.write_text('')
+    started = time.time()
+    timer = threading.Timer(1.0, lambda: udc.write_text('musb-hdrc.4.auto\n'))
+    timer.start()
+    subprocess.run(['sh', str(SCRIPT), 'usb0'], env=env, cwd=str(tmp_path),
+                   capture_output=True, timeout=60)
+    timer.join()
+    first_call = int(_calls(tmp_path)[0].split()[0]) / 1e9
+    assert first_call - started >= 0.9, 'a lease was requested before the UDC was bound'
