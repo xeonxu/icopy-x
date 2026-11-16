@@ -85,6 +85,34 @@ def setWindows(window=None):
             except Exception:
                 pass
 
+
+def _restore_usb_network():
+    """Give the always-on USB network its gadget back when nothing else owns it.
+
+    A mirror session detaches the configfs gadget from the UDC, and only the
+    session itself puts it back.  If the app restarts while that session is
+    interrupted, the gadget stays detached and the device disappears from the
+    host entirely — no serial, no network.  Re-binding here is a no-op when the
+    gadget was never configured, and skipped when the mirror will take the UDC
+    anyway.
+
+    Returns:
+        bool: True when a re-bind was attempted.
+    """
+    try:
+        import settings
+        if settings.getScreenMirror():
+            return False
+    except Exception:
+        return False
+    try:
+        import gadget_linux
+        gadget_linux.restore_rndis()
+        return True
+    except Exception:
+        return False
+
+
 def startApp():
     """Bootstrap and launch the iCopy-X application.
 
@@ -213,6 +241,8 @@ def startApp():
         if settings.getScreenMirror():
             from lib.mirror_service import get_service
             get_service().start()
+        else:
+            _restore_usb_network()
     except Exception:
         pass
 
