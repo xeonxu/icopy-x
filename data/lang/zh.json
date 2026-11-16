@@ -157,6 +157,11 @@
         "rename_unsupported": "此转储不支持重命名"
     },
     "tipsmsg": {
+    "net_role": "设备角色",
+    "net_host_os": "主机系统",
+    "net_fixed": "末位数字",
+    "net_subnet": "地址范围",
+    "net_status": "状态",
         "enter_known_keys_55xx": "输入T5577或\nEM4305的已知密钥",
         "enter_55xx_key_tips": "密钥：",
         "connect_computer": "请连接电脑，\n然后按开始键",
@@ -211,6 +216,12 @@
         "tag_wiping": "擦除中..."
     },
     "itemmsg": {
+    "net_gateway": "网关",
+    "net_client": "客户端",
+    "net_fixed_auto": "自动",
+    "net_applying": "正在应用…",
+    "net_no_lease": "未连接主机",
+    "net_no_link": "无链路",
         "missing_keys_msg1": "方案1）前往读卡器嗅探密钥\n\n方案2）手动输入已知密钥",
         "missing_keys_msg2": "方案3）强制读取以获取部分数据\n\n方案4）进入PC模式执行hardnest",
         "missing_keys_msg3": "方案1）前往读卡器嗅探密钥。\n\n方案2）手动输入已知密钥。",

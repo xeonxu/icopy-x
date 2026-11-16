@@ -157,6 +157,11 @@
     "rename_unsupported": "Renommage impossible pour ce dump"
   },
   "tipsmsg": {
+    "net_role": "Rôle de l'appareil",
+    "net_host_os": "OS hôte",
+    "net_fixed": "Dernier numéro",
+    "net_subnet": "Plage d'adresses",
+    "net_status": "État",
     "enter_known_keys_55xx": "Saisissez une clé connue pour \nle T5577 ou l'EM4305",
     "enter_55xx_key_tips": "Clé :",
     "connect_computer": "Veuillez vous connecter\nà l'ordinateur, puis\nappuyez sur Démarrer",
@@ -211,6 +216,12 @@
     "tag_wiping": "Effacement en cours..."
   },
   "itemmsg": {
+    "net_gateway": "Passerelle",
+    "net_client": "Client",
+    "net_fixed_auto": "Auto",
+    "net_applying": "Application...",
+    "net_no_lease": "Pas d hote",
+    "net_no_link": "Pas de lien",
     "missing_keys_msg1": "Option 1) Aller au lecteur pour intercepter les clés\n\nOption 2) Saisir manuellement les clés connues",
     "missing_keys_msg2": "Option 3) Lecture forcée pour obtenir des données partielles\n\nOption 4) Passer en Mode PC pour effectuer un hardnest",
     "missing_keys_msg3": "Option 1) Aller au lecteur pour intercepter les clés.\n\nOption 2) Saisir manuellement les clés connues.",

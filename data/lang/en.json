@@ -158,6 +158,11 @@
     "rename_unsupported": "Rename not available for this dump"
   },
   "tipsmsg": {
+    "net_role": "Device role",
+    "net_host_os": "Host OS",
+    "net_fixed": "Last number",
+    "net_subnet": "Address range",
+    "net_status": "Status",
     "enter_known_keys_55xx": "Enter a known key for \nT5577 or EM4305",
     "enter_55xx_key_tips": "Key:",
     "connect_computer": "Please connect to\nthe computer.Then\npress start button",
@@ -212,6 +217,12 @@
     "tag_wiping": "Erasing..."
   },
   "itemmsg": {
+    "net_gateway": "Gateway",
+    "net_client": "Client",
+    "net_fixed_auto": "Auto",
+    "net_applying": "Applying...",
+    "net_no_lease": "No host",
+    "net_no_link": "No link",
     "missing_keys_msg1": "Option 1) Go to reader to sniff keys\n\nOption 2) Enter known keys manually",
     "missing_keys_msg2": "Option 3) Force read  to get partial data\n\nOption 4) Go into PC Mode to perform hardnest",
     "missing_keys_msg3": "Option 1) Go to reader to sniff keys.\n\nOption 2) Enter known keys manually.",

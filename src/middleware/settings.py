@@ -33,6 +33,13 @@ Functions:
     fromLevelGetBacklight(level)            — UI level → HW value
     fromLevelGetVolume(level)               — UI level → audio param
     fromLevelGetSleepTime(level)            — UI level → seconds
+    getScreenMirror() / setScreenMirror(v)  — 0=off, 1=on
+    getLanguage() / setLanguage(code)       — UI language code
+    getUsbNetRole() / setUsbNetRole(v)      — 0=Gateway, 1=Client
+    getUsbNetDriver() / setUsbNetDriver(v)  — 0=ECM, 1=RNDIS, 2=NCM
+    getUsbNetSubnet() / setUsbNetSubnet(v)  — Gateway preset index 0-2
+    getUsbNetFixedOctet() / setUsbNetFixedOctet(v) — 0=Auto, 2-254
+    getUsbNetLinkTimeout() / setUsbNetLinkTimeout(v) — minutes, 0=off
 """
 
 import config
@@ -210,3 +217,74 @@ def setLanguage(code):
         code: language-code string (e.g. 'en', 'fr')
     """
     config.setKeyValue('language', str(code))
+
+
+# ── USB network profile ──────────────────────────────────────────────
+# The defaults mirror netconfig.DEFAULTS: a device that never opened the
+# Network menu keeps today's behaviour (RNDIS, gateway, 10.1.1.x, .2).
+
+def _get_int(key, default, allowed=None):
+    """Config read helper: int value, clamped to *allowed* when given."""
+    val = config.getValue(key, str(default))
+    try:
+        value = int(val)
+    except (TypeError, ValueError):
+        return default
+    if allowed is not None and value not in allowed:
+        return default
+    return value
+
+
+def getUsbNetRole():
+    """0 = the device shares its network (gateway), 1 = it uses the host's."""
+    return _get_int('usb_net_role', 0, (0, 1))
+
+
+def setUsbNetRole(value):
+    config.setKeyValue('usb_net_role', str(int(value)))
+
+
+def getUsbNetDriver():
+    """Host profile: 0 = Linux+macOS, 1 = Linux+Windows (default), 2 = all three."""
+    return _get_int('usb_net_driver', 1, (0, 1, 2))
+
+
+def setUsbNetDriver(value):
+    config.setKeyValue('usb_net_driver', str(int(value)))
+
+
+def getUsbNetSubnet():
+    """Gateway preset index (0 = 10.1.1.x, 1 = 192.168.7.x, 2 = 172.16.0.x)."""
+    return _get_int('usb_net_subnet', 0, (0, 1, 2))
+
+
+def setUsbNetSubnet(value):
+    config.setKeyValue('usb_net_subnet', str(int(value)))
+
+
+def getUsbNetFixedOctet():
+    """Client role: last octet to request, 0 = take whatever the host offers."""
+    return _get_int('usb_net_fixed_octet', 2)
+
+
+def setUsbNetFixedOctet(value):
+    config.setKeyValue('usb_net_fixed_octet', str(int(value)))
+
+
+def getUsbNetLinkTimeout():
+    """Minutes without a USB host before the backlight goes off (0 = off)."""
+    return _get_int('usb_net_link_timeout', 0)
+
+
+def setUsbNetLinkTimeout(value):
+    config.setKeyValue('usb_net_link_timeout', str(int(value)))
+
+
+def usbNetwork():
+    """The four persisted network keys as one mapping for netconfig."""
+    return {
+        'role': getUsbNetRole(),
+        'driver': getUsbNetDriver(),
+        'subnet': getUsbNetSubnet(),
+        'fixed_octet': getUsbNetFixedOctet(),
+    }

@@ -476,6 +476,7 @@ class SettingsMenuActivity(BaseActivity):
                            right; OK toggles it in place.
         Language         — label on the left, active language name on the
                            right; OK opens LanguageActivity to pick one.
+        Network          — opens NetworkActivity (USB network profiles).
         Shutdown         — OK powers the device off.
         Reboot           — OK restarts the device.
 
@@ -499,9 +500,10 @@ class SettingsMenuActivity(BaseActivity):
     # Row indices
     _ROW_MIRROR = 0
     _ROW_LANGUAGE = 1
-    _ROW_SHUTDOWN = 2
-    _ROW_REBOOT = 3
-    _ROW_COUNT = 4
+    _ROW_NETWORK = 2
+    _ROW_SHUTDOWN = 3
+    _ROW_REBOOT = 4
+    _ROW_COUNT = 5
 
     # Rows that fit between the title bar and the bottom edge.
     _VISIBLE_ROWS = 5
@@ -509,6 +511,7 @@ class SettingsMenuActivity(BaseActivity):
     _LABEL_KEYS = {
         _ROW_MIRROR: 'screen_mirroring',
         _ROW_LANGUAGE: 'language',
+        _ROW_NETWORK: 'network',
         _ROW_SHUTDOWN: 'shutdown',
         _ROW_REBOOT: 'reboot',
     }
@@ -687,6 +690,8 @@ class SettingsMenuActivity(BaseActivity):
                 self._toggle_mirror()
             elif self._selected == self._ROW_LANGUAGE:
                 actstack.start_activity(LanguageActivity)
+            elif self._selected == self._ROW_NETWORK:
+                actstack.start_activity(NetworkActivity)
             elif self._selected == self._ROW_SHUTDOWN:
                 self._power('shutdown')
             elif self._selected == self._ROW_REBOOT:
@@ -775,6 +780,268 @@ class LanguageActivity(BaseActivity):
             pass
 
         self.finish()
+
+
+# Dimmed colour for a row the current role makes irrelevant.  Same value as
+# BTN_TEXT_COLOR_DISABLED (ground truth: dimmed "Start" during simulation).
+DIM_TEXT_COLOR = '#808080'
+
+# Compact profile labels for a 240 px panel.  The full compatibility line lives
+# in netconfig.menu_label(); the panel names the operating systems only.
+_DRIVER_PANEL_LABELS = {
+    0: 'Mac+Linux',        # ECM
+    1: 'Win+Linux',        # RNDIS
+    2: 'Win+Mac+Linux',    # NCM
+}
+
+
+class NetworkActivity(BaseActivity):
+    """USB network profiles — which host OS, and who serves the addresses.
+
+    Rows (label on the left, current value on the right):
+        Role      Gateway (this device shares its network) or Client (it uses
+                  the host's internet sharing).
+        Host OS   the three USB profiles, named by the operating systems they
+                  serve; never by the USB class name.
+        Fixed IP  Client only: Auto, or the last octet of the address to ask
+                  for (.2 / .10 / .20 / .50).
+        Subnet    Gateway only: the address range handed out by our own DHCP.
+        Status    read-only, from /run/icopy-net.status.
+
+    Rows the current role makes irrelevant are drawn dimmed and refuse OK
+    instead of disappearing, so the layout never jumps while navigating.
+
+    An accepted change persists the four keys, regenerates the profile file and
+    restarts rndis.service, which re-enumerates the USB device: any session over
+    usb0 drops for a few seconds.  No reboot is needed (measured on hardware).
+    PWR leaves without changing anything.
+    """
+
+    ACT_NAME = 'network'
+
+    _ROW_ROLE = 0
+    _ROW_DRIVER = 1
+    _ROW_FIXED = 2
+    _ROW_SUBNET = 3
+    _ROW_STATUS = 4
+    _ROW_COUNT = 5
+
+    def __init__(self, bundle=None):
+        self._selected = 0
+        self._role = 0
+        self._driver = 1
+        self._subnet = 0
+        self._octet = 2
+        self._status = {}
+        self._applying = False
+        super().__init__(bundle)
+
+    # ── state ────────────────────────────────────────────────────────
+
+    def onCreate(self, bundle=None):
+        try:
+            import settings as _settings
+            self._role = _settings.getUsbNetRole()
+            self._driver = _settings.getUsbNetDriver()
+            self._subnet = _settings.getUsbNetSubnet()
+            self._octet = _settings.getUsbNetFixedOctet()
+        except Exception:
+            pass
+        self._status = self._read_status()
+        self._render()
+
+    def _netconfig(self):
+        import netconfig
+        return netconfig
+
+    def _read_status(self):
+        """Current link status, or {} when the device has no status file."""
+        try:
+            import usbnet
+            return usbnet.read_status()
+        except Exception:
+            return {}
+
+    def onResume(self):
+        """Re-read the status: the link may have come up while we were away."""
+        super().onResume()
+        self._status = self._read_status()
+        if self.getCanvas() is not None:
+            self._render()
+
+    # ── layout ───────────────────────────────────────────────────────
+
+    def _row_center_y(self, row):
+        return CONTENT_Y0 + row * LIST_ITEM_H + LIST_ITEM_H // 2
+
+    def _is_enabled(self, row):
+        """Rows that the other role makes irrelevant refuse input."""
+        if row == self._ROW_FIXED:
+            return self._role == 1  # Client
+        if row == self._ROW_SUBNET:
+            return self._role == 0  # Gateway
+        if row == self._ROW_STATUS:
+            return False
+        return True
+
+    def _role_label(self):
+        return resources.get_str('net_client' if self._role == 1 else 'net_gateway')
+
+    def _driver_label(self):
+        return _DRIVER_PANEL_LABELS.get(self._driver, _DRIVER_PANEL_LABELS[1])
+
+    def _octet_label(self):
+        if not self._octet:
+            return resources.get_str('net_fixed_auto')
+        return '.%d' % self._octet
+
+    def _subnet_label(self):
+        try:
+            base = self._netconfig().SUBNETS.get(self._subnet, ('10.1.1.0', 24))[0]
+        except Exception:
+            base = '10.1.1.0'
+        return base.rsplit('.', 1)[0] + '.x'
+
+    def _status_label(self):
+        if self._applying:
+            return resources.get_str('net_applying')
+        try:
+            netconfig = self._netconfig()
+            text = netconfig.status_text(self._status)
+            if text == netconfig.STATUS_NO_LEASE:
+                return resources.get_str('net_no_lease')
+            if text == netconfig.STATUS_NO_LINK:
+                return resources.get_str('net_no_link')
+            return text
+        except Exception:
+            return resources.get_str('net_no_link')
+
+    def _rows(self):
+        return (
+            (resources.get_str('net_role'), self._role_label()),
+            (resources.get_str('net_host_os'), self._driver_label()),
+            (resources.get_str('net_fixed'), self._octet_label()),
+            (resources.get_str('net_subnet'), self._subnet_label()),
+            (resources.get_str('net_status'), self._status_label()),
+        )
+
+    def _render(self):
+        canvas = self.getCanvas()
+        if canvas is None:
+            return
+
+        self.setTitle(resources.get_str('network'))
+        self.setLeftButton('')
+        self.setRightButton('')
+
+        canvas.delete('net_row')
+        canvas.delete('net_sel')
+
+        row_y0 = CONTENT_Y0 + self._selected * LIST_ITEM_H
+        canvas.create_rectangle(
+            0, row_y0, SCREEN_W, row_y0 + LIST_ITEM_H,
+            fill=SELECT_BG, outline=SELECT_BG, tags='net_sel',
+        )
+
+        for index, (label, value) in enumerate(self._rows()):
+            y = self._row_center_y(index)
+            color = NORMAL_TEXT_COLOR if self._is_enabled(index) else DIM_TEXT_COLOR
+            canvas.create_text(
+                15, y, text=label, fill=color,
+                font=resources.get_font(14), anchor='w', tags='net_row',
+            )
+            canvas.create_text(
+                SCREEN_W - 15, y, text=value, fill=color,
+                font=resources.get_font(12), anchor='e', tags='net_row',
+            )
+
+    # ── interaction ──────────────────────────────────────────────────
+
+    def _cycle(self, values, current):
+        try:
+            index = list(values).index(current)
+        except ValueError:
+            index = -1
+        return list(values)[(index + 1) % len(values)]
+
+    def _activate(self):
+        """Cycle the value of the selected row and apply it."""
+        row = self._selected
+        if not self._is_enabled(row):
+            return
+
+        netconfig = None
+        try:
+            netconfig = self._netconfig()
+        except Exception:
+            pass
+
+        if row == self._ROW_ROLE:
+            self._role = self._cycle((0, 1), self._role)
+        elif row == self._ROW_DRIVER:
+            self._driver = self._cycle((0, 1, 2), self._driver)
+        elif row == self._ROW_FIXED:
+            octets = getattr(netconfig, 'FIXED_OCTETS', (0, 2, 10, 20, 50))
+            self._octet = self._cycle(octets, self._octet)
+        elif row == self._ROW_SUBNET:
+            self._subnet = self._cycle((0, 1, 2), self._subnet)
+        else:
+            return
+
+        self._apply()
+
+    def _apply(self):
+        """Persist the profile, re-apply it live, and show the new status."""
+        try:
+            import settings as _settings
+            _settings.setUsbNetRole(self._role)
+            _settings.setUsbNetDriver(self._driver)
+            _settings.setUsbNetSubnet(self._subnet)
+            _settings.setUsbNetFixedOctet(self._octet)
+        except Exception:
+            pass
+
+        # A running mirror session owns the USB gadget; hand it back first.
+        try:
+            import mirror_service
+            mirror_service.stop()
+        except Exception:
+            pass
+
+        self._applying = True
+        self._render()
+        canvas = self.getCanvas()
+        if canvas is not None and hasattr(canvas, 'update_idletasks'):
+            try:
+                canvas.update_idletasks()
+            except Exception:
+                pass
+
+        try:
+            import usbnet
+            self._status = usbnet.apply(
+                self._role, self._driver, self._subnet, self._octet)
+        except Exception:
+            self._status = self._read_status()
+
+        self._applying = False
+        self._render()
+
+    def onKeyEvent(self, key):
+        if key == KEY_UP:
+            if self._selected > 0:
+                self._selected -= 1
+                self._render()
+        elif key == KEY_DOWN:
+            if self._selected < self._ROW_COUNT - 1:
+                self._selected += 1
+                self._render()
+        elif key == KEY_OK:
+            self._activate()
+        elif key == KEY_PWR:
+            if self._handlePWR():
+                return
+            self.finish()
 
 
 # ═══════════════════════════════════════════════════════════════════════

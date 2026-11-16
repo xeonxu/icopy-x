@@ -67,6 +67,13 @@ POOL_FIRST = 100
 POOL_LAST = 150
 LEASE_TIME = '12h'
 
+# Fixed-last-octet values the Client role offers. 0 means "take what is offered".
+FIXED_OCTETS = (0, 2, 10, 20, 50)
+
+# Compact status strings for the panel; the menu translates them.
+STATUS_NO_LEASE = 'no lease'
+STATUS_NO_LINK = 'no link'
+
 DEFAULTS = {
     'role': ROLE_GATEWAY,
     'driver': DRIVER_RNDIS,
@@ -227,3 +234,34 @@ def _valid_octet(value):
     except (TypeError, ValueError):
         return False
     return octet == 0 or 2 <= octet <= 254
+
+
+def parse_status(text):
+    """Read ``/run/icopy-net.status`` into a mapping.
+
+    The file is written by the boot script and by the DHCP hook. A missing or
+    malformed file is indistinguishable from "nothing configured yet", so both
+    yield an empty mapping and the menu shows "no link".
+    """
+    status = {}
+    if not isinstance(text, str):
+        return status
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key, value = key.strip(), value.strip()
+        if key in ('driver', 'role', 'address', 'msg', 'ts') and value:
+            status[key] = value
+    return status
+
+
+def status_text(status):
+    """What the Status row shows: the live address, or why there is none."""
+    address = (status or {}).get('address', '')
+    if address and address != 'none':
+        return address
+    if 'fallback' in (status or {}).get('msg', ''):
+        return STATUS_NO_LEASE
+    return STATUS_NO_LINK
