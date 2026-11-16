@@ -74,6 +74,7 @@ acquire() {  # $1 = soft deadline in seconds, then udhcpc options
         [ -n "$granted" ] && return 0
         now=$(elapsed)
         [ "$now" -ge "$limit" ] && return 1
+        write_status "none" "waiting for the host (${now}s)"
         sleep "$RETRY_SLEEP"
     done
 }

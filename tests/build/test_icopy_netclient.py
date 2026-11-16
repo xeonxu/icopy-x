@@ -28,6 +28,9 @@ exit 0
 
 FAKE_UDHCPC = """#!/bin/sh
 echo "$(date +%s%N) $*" >> "$FAKE_STATE/udhcpc.calls"
+# Snapshot the status file as it is when this attempt starts: the menu reads
+# the same file, so this is what the operator sees while we wait.
+cat "$ICOPY_NET_STATUS" 2>/dev/null | sed -n "s/^msg=//p" >> "$FAKE_STATE/msg.calls"
 n=$(wc -l < "$FAKE_STATE/udhcpc.calls")
 if [ -n "${FAKE_FAIL_FIRST:-}" ] && [ "$n" -le "$FAKE_FAIL_FIRST" ]; then
     exit 1
@@ -208,3 +211,13 @@ def test_no_lease_is_asked_for_before_the_gadget_is_bound(tmp_path):
     timer.join()
     first_call = int(_calls(tmp_path)[0].split()[0]) / 1e9
     assert first_call - started >= 0.9, 'a lease was requested before the UDC was bound'
+
+
+def test_the_waiting_state_is_visible_while_we_retry(tmp_path):
+    """The menu reads this file: it must say we are waiting, not stay silent."""
+    env, status = _env(tmp_path, conf='driver=rndis\nfixed_octet=0\n', FAKE_RC='1',
+                       ICOPY_NET_DEADLINE='3', ICOPY_NET_RETRY_SLEEP='1')
+    subprocess.run(['sh', str(SCRIPT), 'usb0'], env=env, cwd=str(tmp_path),
+                   capture_output=True, timeout=60)
+    seen = (tmp_path / 'state' / 'msg.calls').read_text().splitlines()
+    assert any(m.startswith('waiting for the host') for m in seen), seen
