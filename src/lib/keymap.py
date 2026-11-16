@@ -163,6 +163,15 @@ class KeyEvent:
             logger.debug("Unknown key event ignored: %r", event)
             return
 
+        # A key press is the only way back from the panel-off state, so it is
+        # handled before the activity sees the event: the key both wakes the
+        # panel and does what it normally does.
+        try:
+            from lib import linkwatch
+            linkwatch.get_watch().note_key()
+        except Exception:
+            pass
+
         with self._lock:
             target = self._target
 

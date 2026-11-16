@@ -235,6 +235,17 @@ def startApp():
     except Exception:
         pass
 
+    # ── 6. Panel off while no USB host is attached ─────────────────
+    # Started before the mirror service: the watcher only decides when the
+    # backlight goes dark, and a mirror session does not need the panel lit.
+    try:
+        from lib import linkwatch
+        _watch = linkwatch.get_watch()
+        _watch.use_ui_thread(actstack._root)
+        _watch.start()
+    except Exception:
+        pass
+
     # ── 6. Start screen mirror service if configured ────────────────
     try:
         import settings
