@@ -159,7 +159,8 @@
   "tipsmsg": {
     "net_role": "Rôle",
     "net_host_os": "OS hôte",
-    "net_fixed": "N° final",
+    "net_client_ip": "IP du PC",
+    "net_device_ip": "Notre IP",
     "net_subnet": "Plage",
     "net_status": "État",
     "enter_known_keys_55xx": "Saisissez une clé connue pour \nle T5577 ou l'EM4305",

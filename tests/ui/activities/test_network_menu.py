@@ -93,7 +93,8 @@ def test_rows_are_labelled_by_what_the_user_chooses(state):
     import resources
     activity = _open()
     texts = _texts(activity.getCanvas())
-    for key in ('net_role', 'net_host_os', 'net_fixed', 'net_subnet', 'net_status'):
+    for key in ('net_role', 'net_host_os', 'net_client_ip', 'net_subnet',
+                'net_status'):
         assert resources.get_str(key) in texts
     # The host profile never names the USB class.
     for word in ('rndis', 'RNDIS', 'ecm', 'ECM', 'ncm', 'NCM'):
@@ -183,11 +184,12 @@ def test_status_reports_a_missing_host(state):
     assert resources.get_str('net_no_lease') in _texts(activity.getCanvas())
 
 
-_LABEL_KEYS = ('net_role', 'net_host_os', 'net_fixed', 'net_subnet', 'net_status')
+_LABEL_KEYS = ('net_role', 'net_host_os', 'net_client_ip', 'net_device_ip',
+               'net_subnet', 'net_status')
 # Measured on the device with the real fonts: 240 px per row, 30 px of margins
 # and a value up to 13 characters. These limits are the character budget that
 # keeps every label+value pair inside the row.
-_LABEL_LIMIT = {'en': 10, 'fr': 10, 'zh': 5}
+_LABEL_LIMIT = {'en': 10, 'fr': 10, 'zh': 6}
 
 
 def test_labels_stay_inside_the_row():
@@ -237,3 +239,18 @@ def test_gateway_range_does_not_touch_the_client_network(state):
     assert state['values']['subnet'] == 1
     assert state['values']['client_network'] == 0
     assert activity._subnet_label() == '192.168.7.x'
+
+
+def test_the_address_row_says_whose_address_it_is(state):
+    """Gateway serves the computer's address; Client sets our own."""
+    activity = _open()
+    label, value = activity._rows()[activity._ROW_FIXED]
+    assert label == resources.get_str('net_client_ip')
+    assert value == '100-150', value      # the pool the computer takes from
+
+    state['values']['role'] = 1
+    state['values']['octet'] = 10
+    activity = _open()
+    label, value = activity._rows()[activity._ROW_FIXED]
+    assert label == resources.get_str('net_device_ip')
+    assert value == '.10'

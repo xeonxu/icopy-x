@@ -160,7 +160,8 @@
   "tipsmsg": {
     "net_role": "Role",
     "net_host_os": "Host OS",
-    "net_fixed": "Last digit",
+    "net_client_ip": "Client IP",
+    "net_device_ip": "Device IP",
     "net_subnet": "Range",
     "net_status": "Status",
     "enter_known_keys_55xx": "Enter a known key for \nT5577 or EM4305",

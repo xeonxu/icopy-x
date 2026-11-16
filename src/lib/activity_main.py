@@ -803,8 +803,10 @@ class NetworkActivity(BaseActivity):
                   the host's internet sharing).
         Host OS   the three USB profiles, named by the operating systems they
                   serve; never by the USB class name.
-        Fixed IP  Client only: Auto, or the last octet of the address to ask
-                  for (.2 / .10 / .20 / .50).
+        Device IP Client only: Auto, or the last octet we ask the host for
+                  (.2 / .10 / .20 / .50). In the Gateway role the row is titled
+                  "Client IP" and shows the pool the computer's address comes
+                  from, because nothing there pins an address.
         Range     Gateway: the address range our own DHCP hands out. Client:
                   the host's preset per operating system (Windows, macOS,
                   Linux) or Auto, which shows the address actually acquired.
@@ -828,6 +830,14 @@ class NetworkActivity(BaseActivity):
     _ROW_SUBNET = 3
     _ROW_STATUS = 4
     _ROW_COUNT = 5
+
+    _LABEL_KEYS = {
+        _ROW_ROLE: 'net_role',
+        _ROW_DRIVER: 'net_host_os',
+        _ROW_FIXED: 'net_device_ip',   # the role picks the wording
+        _ROW_SUBNET: 'net_subnet',
+        _ROW_STATUS: 'net_status',
+    }
 
     def __init__(self, bundle=None):
         self._selected = 0
@@ -894,6 +904,15 @@ class NetworkActivity(BaseActivity):
         return _DRIVER_PANEL_LABELS.get(self._driver, _DRIVER_PANEL_LABELS[1])
 
     def _octet_label(self):
+        netconfig = self._netconfig()
+        if self._role != 1:
+            # The Gateway role does not pin anything: the computer's address
+            # comes from the pool, so that is what the row shows.
+            try:
+                first, last = netconfig.pool(self._subnet)
+                return '%s-%s' % (first.rsplit('.', 1)[-1], last.rsplit('.', 1)[-1])
+            except Exception:
+                return ''
         if not self._octet:
             return resources.get_str('net_fixed_auto')
         return '.%d' % self._octet
@@ -932,13 +951,33 @@ class NetworkActivity(BaseActivity):
         except Exception:
             return resources.get_str('net_no_link')
 
+    def _row_label(self, row):
+        """Label of a row; the address row names whose address it controls.
+
+        The same setting means different things per role, so the row says which:
+        in the Gateway role the address belongs to the computer we serve (it
+        comes from our DHCP pool), in the Client role it is our own address.
+        """
+        if row == self._ROW_FIXED:
+            return resources.get_str(
+                'net_device_ip' if self._role == 1 else 'net_client_ip')
+        return resources.get_str(self._LABEL_KEYS[row])
+
+    def _row_value(self, row):
+        if row == self._ROW_ROLE:
+            return self._role_label()
+        if row == self._ROW_DRIVER:
+            return self._driver_label()
+        if row == self._ROW_FIXED:
+            return self._octet_label()
+        if row == self._ROW_SUBNET:
+            return self._subnet_label()
+        return self._status_label()
+
     def _rows(self):
-        return (
-            (resources.get_str('net_role'), self._role_label()),
-            (resources.get_str('net_host_os'), self._driver_label()),
-            (resources.get_str('net_fixed'), self._octet_label()),
-            (resources.get_str('net_subnet'), self._subnet_label()),
-            (resources.get_str('net_status'), self._status_label()),
+        return tuple(
+            (self._row_label(row), self._row_value(row))
+            for row in range(self._ROW_COUNT)
         )
 
     def _render(self):

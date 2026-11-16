@@ -159,7 +159,8 @@
     "tipsmsg": {
     "net_role": "角色",
     "net_host_os": "系统",
-    "net_fixed": "末位",
+    "net_client_ip": "电脑 IP",
+    "net_device_ip": "本机 IP",
     "net_subnet": "范围",
     "net_status": "状态",
         "enter_known_keys_55xx": "输入T5577或\nEM4305的已知密钥",
