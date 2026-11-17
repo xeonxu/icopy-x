@@ -1,7 +1,13 @@
 {
   "_name": "English",
   "_font": "mononoki",
-  "_keyboard": ["ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345", "6789-_"],
+  "_keyboard": [
+    "ABCDEFGH",
+    "IJKLMNOP",
+    "QRSTUVWX",
+    "YZ012345",
+    "6789-_"
+  ],
   "title": {
     "language": "Language",
     "plugins": "Plugins",
@@ -195,7 +201,9 @@
     "ota_battery_tips3": "please connect the charger.",
     "ota_battery_tips4": "Charging  : {}",
     "ota_battery_tips5": "Percentage: {}",
-    "no_tag_history": "No dump info. \nOnly support:\n.bin .eml .txt"
+    "no_tag_history": "No dump info. \nOnly support:\n.bin .eml .txt",
+    "net_sleep": "Screen off",
+    "backlight_level": "Brightness"
   },
   "procbarmsg": {
     "reading": "Reading...",

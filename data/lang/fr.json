@@ -194,7 +194,9 @@
     "no_tag_history": "Aucune info de dump. \nFormats pris en charge :\n.bin .eml .txt",
     "mirror_transport": "Lien miroir ?",
     "link_serial": "Série",
-    "link_ethernet": "Ethernet"
+    "link_ethernet": "Ethernet",
+    "net_sleep": "Extinction",
+    "backlight_level": "Luminosité"
   },
   "procbarmsg": {
     "reading": "Lecture en cours...",

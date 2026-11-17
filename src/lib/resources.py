@@ -240,6 +240,8 @@ class StringEN:
         'net_device_ip': 'Device IP',
         'net_subnet': 'Range',
         'net_status': 'Status',
+        'net_sleep': 'Screen off',
+        'backlight_level': 'Brightness',
         'mirror_transport': 'Mirror Link?',
         'link_serial': 'Serial',
         'link_ethernet': 'Ethernet',

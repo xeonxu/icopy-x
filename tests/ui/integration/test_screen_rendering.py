@@ -76,7 +76,7 @@ class TestScreenRendering:
         assert 'Simulation' in content_texts
 
     def test_backlight_structure(self):
-        """Backlight: title, 3 radio items, checked current."""
+        """Backlight: title, the level row and the screen-off row."""
         from activity_main import BacklightActivity
         act = actstack.start_activity(BacklightActivity)
         canvas = act.getCanvas()
@@ -86,11 +86,12 @@ class TestScreenRendering:
         # Backlight has no M2 button (setRightButton(""), save is via OK key)
         assert state['M2'] is None
 
-        # Content should include the three level labels
+        # The two row labels, and the current value of each.
         content_texts = [ct['text'] for ct in state['content_text']]
-        assert 'Low' in content_texts
-        assert 'Middle' in content_texts
-        assert 'High' in content_texts
+        assert 'Brightness' in content_texts
+        assert 'Screen off' in content_texts
+        assert content_texts.count('High') == 1, 'the level row shows one value'
+        assert 'Off' in content_texts
 
     def test_volume_structure(self):
         """Volume: title, 4 radio items, checked current."""

@@ -145,26 +145,20 @@ def _set_config_value(key, value):
 # =====================================================================
 
 class BacklightActivity(BaseActivity):
-    """Backlight level setting: Low / Middle / High.
+    """Backlight level, and how long the panel stays lit.
 
-    Uses CheckedListView with radio-style selection.
-    3 levels, NO "Off" option.
+    Rows:
+        Brightness   Low / Middle / High.  OK advances the level and applies it
+                     to the hardware immediately; PWR restores the level the
+                     screen was opened with.
+        Screen off   Off / 1 / 2 / 5 / 10 minutes without a key press or without
+                     a USB host before the backlight goes dark.  The next key
+                     press brings it back.
 
-    Binary source: activity_main.so BacklightActivity
-    Verified: QEMU screenshots, real device traces (20260330)
-    Spec: docs/UI_Mapping/08_backlight/README.md
+    The timeout is persisted on its own: the watcher re-reads the setting on
+    every poll, so choosing it never restarts the USB link.
 
-    Key behavior (from binary):
-        UP/DOWN: scroll through levels in CheckedListView + instant
-                 preview via hmi_driver.setbaklight() (on_selection_change)
-        M2/OK:   save selected level (settings + hmi_driver), stay on screen
-        PWR:     recovery_backlight() restores original hw, then finish()
-        M1:      no action (empty label)
-
-    Screen layout:
-        Title: "Backlight" (#7C829A bar)
-        Content: CheckedListView with 3 items at y=40
-        M1: "" (empty), M2: "" (empty)
+    Spec for the level half of the screen: docs/UI_Mapping/08_backlight/README.md
     """
 
     ACT_NAME = 'backlight'
@@ -174,118 +168,120 @@ class BacklightActivity(BaseActivity):
     _CONFIG_KEY = 'backlight'
     _DEFAULT_LEVEL = 2  # High -- factory default
 
-    def onCreate(self, bundle):
-        """Set up title, buttons, radio list with current setting.
+    _ROW_BRIGHTNESS = 0
+    _ROW_SLEEP = 1
+    _ROW_COUNT = 2
 
-        Flow (from binary onCreate):
-            1. settings.getBacklight() -> current level (int)
-            2. items = [blline1, blline2, blline3] from resources.so
-            3. Create CheckedListView with items
-            4. Set check mark on item[current_level]
-            5. Store original_level for recovery
-        """
-        # Resolve item labels from resources
-        self._item_labels = list(resources.get_str(list(self._KEYS)))
+    # Minutes; 0 turns the timeout off.
+    _SLEEP_CHOICES = (0, 1, 2, 5, 10)
 
-        # Read current level
-        self._original_level = _get_config_value(
-            self._CONFIG_KEY, self._DEFAULT_LEVEL
-        )
-        # Clamp to valid range
-        if not (0 <= self._original_level < len(self._item_labels)):
-            self._original_level = self._DEFAULT_LEVEL
+    def onCreate(self, bundle=None):
+        self._selected = self._ROW_BRIGHTNESS
+        self._level = _get_config_value(self._CONFIG_KEY, self._DEFAULT_LEVEL)
+        if not (0 <= self._level < len(self._KEYS)):
+            self._level = self._DEFAULT_LEVEL
+        # PWR puts the hardware back the way the operator found it.
+        self._original_level = self._level
+        self._timeout = self._read_timeout()
 
-        # Title and buttons (from binary: M1="" empty, M2="OK")
         self.setTitle(resources.get_str('backlight'))
         self.setLeftButton('')
-        self.setRightButton('')  # was OK, fixed per HANDOVER.md
+        self.setRightButton('')
+        self._render()
 
-        # Create CheckedListView
+    def _read_timeout(self):
+        """Minutes chosen for the panel timeout; 0 (off) when unreadable."""
+        try:
+            import settings
+            return int(settings.getUsbNetLinkTimeout())
+        except Exception:
+            return 0
+
+    # ── values ───────────────────────────────────────────────────────
+
+    def _level_label(self):
+        return resources.get_str(list(self._KEYS))[self._level]
+
+    def _sleep_label(self):
+        """Off, or the chosen number of minutes."""
+        if not self._timeout:
+            return resources.get_str('valueline1')
+        return '%d min' % self._timeout
+
+    def _rows(self):
+        return (
+            (resources.get_str('backlight_level'), self._level_label()),
+            (resources.get_str('net_sleep'), self._sleep_label()),
+        )
+
+    # ── layout ───────────────────────────────────────────────────────
+
+    def _render(self):
         canvas = self.getCanvas()
         if canvas is None:
             return
 
-        self._listview = CheckedListView(canvas)
-        self._listview.setItems(self._item_labels)
-        self._listview.setSelection(self._original_level)
-        self._listview.check(self._original_level)
-        # Wire instant preview: brightness changes on each UP/DOWN
-        # Ground truth: UI_Mapping/10_backlight/README.md line 82-83
-        self._listview.setOnSelectionChangeCall(self._on_preview)
-        self._listview.show()
+        self.setTitle(resources.get_str('backlight'))
+        self.setLeftButton('')
+        self.setRightButton('')
 
-        # Toast for visual feedback (updateBacklight lambda in binary)
-        self._toast = Toast(canvas)
+        canvas.delete('backlight_row')
+        canvas.delete('backlight_sel')
 
-    def _on_preview(self, new_idx):
-        """Instant backlight preview on selection change (UP/DOWN).
+        row_y0 = CONTENT_Y0 + self._selected * LIST_ITEM_H
+        canvas.create_rectangle(
+            0, row_y0, SCREEN_W, row_y0 + LIST_ITEM_H,
+            fill=SELECT_BG, outline=SELECT_BG, tags='backlight_sel',
+        )
+        for index, (label, value) in enumerate(self._rows()):
+            y = CONTENT_Y0 + index * LIST_ITEM_H + LIST_ITEM_H // 2
+            canvas.create_text(
+                15, y, text=label, fill=NORMAL_TEXT_COLOR,
+                font=resources.get_font(14), anchor='w', tags='backlight_row',
+            )
+            canvas.create_text(
+                SCREEN_W - 15, y, text=value, fill=NORMAL_TEXT_COLOR,
+                font=resources.get_font(11), anchor='e', tags='backlight_row',
+            )
 
-        Ground truth (trace_original_backlight_volume_20260410.txt):
-        Original firmware calls settings.setBacklight(level) on EVERY
-        UP/DOWN navigation. settings.setBacklight() both persists to
-        conf.ini AND applies the hardware change via hmi_driver.
-        """
-        try:
-            import settings
-            settings.setBacklight(new_idx)
-        except Exception:
-            pass
+    # ── interaction ──────────────────────────────────────────────────
 
     def onKeyEvent(self, key):
-        """Handle UP/DOWN (scroll + preview), M2/OK (save), PWR (cancel).
-
-        From binary onKeyEvent:
-            UP:   CheckedListView.scrollUp()  (prev) + instant preview
-            DOWN: CheckedListView.scrollDown() (next) + instant preview
-            M2:   save selected level -> updateBacklight()
-            OK:   same as M2
-            PWR:  recovery_backlight() -> finish()
-        """
         if key == KEY_UP:
-            if hasattr(self, '_listview'):
-                self._listview.prev()
+            self._selected = (self._selected - 1) % self._ROW_COUNT
+            self._render()
         elif key == KEY_DOWN:
-            if hasattr(self, '_listview'):
-                self._listview.next()
+            self._selected = (self._selected + 1) % self._ROW_COUNT
+            self._render()
         elif key in (KEY_M2, KEY_OK):
-            self._save()
+            self._activate()
         elif key == KEY_PWR:
-            if self._handlePWR():
-                return
             self._cancel()
 
-    def _save(self):
-        """Save selected level via settings.setBacklight(level).
-
-        Ground truth (trace_original_backlight_volume_20260410.txt):
-            SETTINGS.setBacklight((1,))  — UI level only (0/1/2)
-        settings.setBacklight() handles BOTH config persist AND
-        hardware application via hmi_driver internally.
-        Does NOT finish -- stays on screen.
-        """
-        if not hasattr(self, '_listview'):
+    def _activate(self):
+        """Cycle the selected row's value."""
+        if self._selected == self._ROW_BRIGHTNESS:
+            self._level = (self._level + 1) % len(self._KEYS)
+            self._apply_level()
             return
 
-        selected = self._listview.selection()
+        choices = self._SLEEP_CHOICES
+        index = choices.index(self._timeout) if self._timeout in choices else -1
+        self._timeout = choices[(index + 1) % len(choices)]
+        try:
+            import settings
+            settings.setUsbNetLinkTimeout(self._timeout)
+        except Exception:
+            pass
+        self._render()
 
-        # Update check mark (radio style: uncheck old, check new)
-        self._listview.check(self._original_level, False)
-        self._listview.check(selected)
-
-        # Persist + apply hardware (settings.so handles both)
-        _set_config_value(self._CONFIG_KEY, selected)
-
-        # Update original_level so future PWR cancels use the new value
-        self._original_level = selected
+    def _apply_level(self):
+        """Persist the level and push it to the hardware."""
+        _set_config_value(self._CONFIG_KEY, self._level)
+        self._render()
 
     def _cancel(self):
-        """Revert to original hardware level, finish.
-
-        Ground truth (trace_original_backlight_volume_20260410.txt):
-            On PWR, original calls settings.getBacklight() then finish.
-            The recovery sends the original UI level (0/1/2) back to
-            settings.setBacklight() to revert hardware.
-        """
+        """Restore the level the screen was opened with, then leave."""
         try:
             import settings
             settings.setBacklight(self._original_level)

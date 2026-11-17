@@ -313,3 +313,12 @@ def usbNetwork():
         'client_network': getUsbNetClientNetwork(),
         'fixed_octet': getUsbNetFixedOctet(),
     }
+
+
+def getUsbNetLinkTimeout():
+    """Minutes without a USB host before the backlight goes off (0 = off)."""
+    return _get_int('usb_net_link_timeout', 0)
+
+
+def setUsbNetLinkTimeout(value):
+    config.setKeyValue('usb_net_link_timeout', str(int(value)))

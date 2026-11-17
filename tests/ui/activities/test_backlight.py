@@ -1,15 +1,20 @@
 """Tests for BacklightActivity.
 
-Validates against the exhaustive UI mapping in
-docs/UI_Mapping/08_backlight/README.md and V1090_SETTINGS_FLOWS_COMPLETE.md.
+The screen holds two settings now: the level (which the hardware shows back
+immediately) and how long the panel stays lit before it goes dark.
 
-Ground truth:
+Ground truth for the level half of the screen:
     - Title: "Backlight" (resources.get_str('backlight'))
-    - Items: "Low", "Middle", "High" (blline1, blline2, blline3)
-    - M1: "" (empty), M2: "OK"
-    - M2/OK: save level, stay on screen
-    - PWR: recovery_backlight() restores original, finish()
+    - Values: "Low", "Middle", "High" (blline1, blline2, blline3)
+    - M1: "" (empty), M2: "" (empty)
+    - OK: advance the level, save it, stay on screen
+    - PWR: restore the level the screen was opened with, finish()
     - Config key: "backlight", values 0/1/2
+
+Ground truth for the timeout half:
+    - Label: "Screen off" (net_sleep), values Off / 1 / 2 / 5 / 10 minutes
+    - Persisted as usb_net_link_timeout; the watcher re-reads it every poll, so
+      choosing it never restarts the USB link.
 """
 
 import sys
@@ -18,6 +23,7 @@ import pytest
 
 from tests.ui.conftest import MockCanvas
 import actstack
+import resources
 from _constants import KEY_UP, KEY_DOWN, KEY_OK, KEY_M1, KEY_M2, KEY_PWR
 
 
@@ -70,6 +76,12 @@ class MockSettings:
             return self._HW_VALUES[level]
         return self._HW_VALUES[-1]
 
+    def getUsbNetLinkTimeout(self):
+        return int(self._config._store.get('usb_net_link_timeout', 0))
+
+    def setUsbNetLinkTimeout(self, value):
+        self._config.setKeyValue('usb_net_link_timeout', int(value))
+
 
 class MockHmiDriver:
     """Mock hmi_driver.so -- records setbaklight calls."""
@@ -118,6 +130,8 @@ def install_mocks(mock_config, mock_hmi):
     settings_mod.getBacklight = mock_settings.getBacklight
     settings_mod.setBacklight = mock_settings.setBacklight
     settings_mod.fromLevelGetBacklight = mock_settings.fromLevelGetBacklight
+    settings_mod.getUsbNetLinkTimeout = mock_settings.getUsbNetLinkTimeout
+    settings_mod.setUsbNetLinkTimeout = mock_settings.setUsbNetLinkTimeout
 
     hmi_mod = types.ModuleType('hmi_driver')
     hmi_mod.setbaklight = mock_hmi.setbaklight
@@ -147,133 +161,136 @@ def install_mocks(mock_config, mock_hmi):
         sys.modules.pop('hmi_driver', None)
 
 
-def _create_backlight(mock_config, level=2):
-    """Start a BacklightActivity with config pre-set to *level*."""
+def _create_backlight(mock_config, level=2, timeout=0):
+    """Start a BacklightActivity with the config pre-set."""
     mock_config._store['backlight'] = level
+    mock_config._store['usb_net_link_timeout'] = timeout
     from activity_main import BacklightActivity
-    act = actstack.start_activity(BacklightActivity)
-    return act
+    return actstack.start_activity(BacklightActivity)
+
+
+def _texts(activity):
+    return activity.getCanvas().get_all_text()
 
 
 # ---------------------------------------------------------------
-# Tests
+# The level
 # ---------------------------------------------------------------
 
-class TestBacklightActivity:
-    """BacklightActivity unit tests -- 12 scenarios covering all states."""
+class TestBacklightLevel:
 
     def test_title_is_backlight(self, install_mocks, mock_config):
-        """Title bar must read 'Backlight' (resources key: backlight)."""
-        act = _create_backlight(mock_config)
-        canvas = act.getCanvas()
-        texts = canvas.get_all_text()
-        assert 'Backlight' in texts
+        activity = _create_backlight(mock_config)
+        assert 'Backlight' in _texts(activity)
 
-    def test_buttons_empty_and_ok(self, install_mocks, mock_config):
-        """Both M1 and M2 labels are empty (ground truth: buttons hidden)."""
-        act = _create_backlight(mock_config)
-        canvas = act.getCanvas()
-        texts = canvas.get_all_text()
-        # Ground truth: setRightButton('') -- no OK button visible
+    def test_buttons_stay_empty(self, install_mocks, mock_config):
+        """M1 and M2 labels are empty (ground truth: buttons hidden)."""
+        activity = _create_backlight(mock_config)
+        texts = _texts(activity)
         assert 'OK' not in texts
         assert 'Back' not in texts
 
-    def test_items_low_middle_high(self, install_mocks, mock_config):
-        """Content must show exactly 3 items: Low, Middle, High."""
-        act = _create_backlight(mock_config)
-        canvas = act.getCanvas()
-        texts = canvas.get_all_text()
-        assert 'Low' in texts
-        assert 'Middle' in texts
-        assert 'High' in texts
+    def test_the_row_shows_every_level(self, install_mocks, mock_config):
+        for level, label in enumerate(('Low', 'Middle', 'High')):
+            activity = _create_backlight(mock_config, level=level)
+            assert label in _texts(activity), (level, _texts(activity))
 
-    def test_initial_selection_from_config(self, install_mocks, mock_config):
-        """Initial selection must match the config value."""
-        act = _create_backlight(mock_config, level=0)
-        assert act._listview.selection() == 0
-        assert 0 in act._listview.getCheckPosition()
+    def test_initial_selection_matches_the_config(self, install_mocks, mock_config):
+        for level in (0, 1, 2):
+            activity = _create_backlight(mock_config, level=level)
+            assert activity._level == level
 
-    def test_initial_selection_middle(self, install_mocks, mock_config):
-        """Config level=1 -> Middle selected."""
-        act = _create_backlight(mock_config, level=1)
-        assert act._listview.selection() == 1
-        assert 1 in act._listview.getCheckPosition()
-
-    def test_up_scrolls_up(self, install_mocks, mock_config):
-        """UP key moves selection upward (wraps at top)."""
-        act = _create_backlight(mock_config, level=1)
-        assert act._listview.selection() == 1
-        act.onKeyEvent(KEY_UP)
-        assert act._listview.selection() == 0
-
-    def test_down_scrolls_down(self, install_mocks, mock_config):
-        """DOWN key moves selection downward."""
-        act = _create_backlight(mock_config, level=0)
-        assert act._listview.selection() == 0
-        act.onKeyEvent(KEY_DOWN)
-        assert act._listview.selection() == 1
-
-    def test_m2_saves_and_stays(self, install_mocks, mock_config, mock_hmi):
-        """M2 saves the selected level but does NOT finish the activity."""
-        act = _create_backlight(mock_config, level=0)
-        # Navigate to High (2)
-        act.onKeyEvent(KEY_DOWN)
-        act.onKeyEvent(KEY_DOWN)
-        assert act._listview.selection() == 2
-        act.onKeyEvent(KEY_M2)
-        # Verify saved
-        assert mock_config._store['backlight'] == 2
-        # Verify hmi_driver was called with HW value (100 for High)
-        assert ('setbaklight', 100) in mock_hmi.calls
-        # Activity should still be alive (not finished)
-        assert not act.life.destroyed
-
-    def test_ok_saves_and_stays(self, install_mocks, mock_config, mock_hmi):
-        """OK key has the same effect as M2 -- save but stay."""
-        act = _create_backlight(mock_config, level=2)
-        act.onKeyEvent(KEY_UP)  # -> Middle (1)
-        act.onKeyEvent(KEY_OK)
-        assert mock_config._store['backlight'] == 1
-        assert not act.life.destroyed
-
-    def test_pwr_cancels_and_finishes(self, install_mocks, mock_config, mock_hmi):
-        """PWR restores original backlight level and finishes activity."""
-        act = _create_backlight(mock_config, level=0)
-        # Navigate away from original
-        act.onKeyEvent(KEY_DOWN)  # -> Middle (1)
-        # Cancel
-        act.onKeyEvent(KEY_PWR)
-        # Original level (0) should still be in config (cancel doesn't save)
-        assert mock_config._store['backlight'] == 0
-        # hmi_driver should get the recovery call with HW value (20 for Low)
-        assert ('setbaklight', 20) in mock_hmi.calls
-        # Activity should be finished
-        assert act.life.destroyed
-
-    def test_save_updates_config(self, install_mocks, mock_config):
-        """After M2, config key 'backlight' must hold the new level."""
-        act = _create_backlight(mock_config, level=2)
-        act.onKeyEvent(KEY_UP)  # -> Middle (1)
-        act.onKeyEvent(KEY_UP)  # -> Low (0)
-        act.onKeyEvent(KEY_M2)
-        assert mock_config._store['backlight'] == 0
-
-    def test_save_updates_check_marks(self, install_mocks, mock_config):
-        """After save, the new level is checked and old is unchecked."""
-        act = _create_backlight(mock_config, level=2)
-        act.onKeyEvent(KEY_UP)  # -> 1
-        act.onKeyEvent(KEY_M2)
-        checked = act._listview.getCheckPosition()
-        assert 1 in checked
-        assert 2 not in checked
-
-    def test_default_selection_when_no_config(self, install_mocks, mock_config):
-        """When config has no 'backlight' key, default to level 2 (High)."""
-        # Don't set any value in config -- _get_config_value falls back
-        # to settings.getBacklight() which will fail, then config.getValue
-        # which will also fail, giving default=2
+    def test_default_level_when_config_is_empty(self, install_mocks, mock_config):
+        """No stored level: High, the factory default."""
         mock_config._store.clear()
         from activity_main import BacklightActivity
-        act = actstack.start_activity(BacklightActivity)
-        assert act._listview.selection() == 2
-        assert 2 in act._listview.getCheckPosition()
+        activity = actstack.start_activity(BacklightActivity)
+        assert activity._level == 2
+
+    def test_up_and_down_move_between_the_rows(self, install_mocks, mock_config):
+        activity = _create_backlight(mock_config, level=0)
+        assert activity._selected == activity._ROW_BRIGHTNESS
+        activity.onKeyEvent(KEY_DOWN)
+        assert activity._selected == activity._ROW_SLEEP
+        activity.onKeyEvent(KEY_DOWN)
+        assert activity._selected == activity._ROW_BRIGHTNESS
+        activity.onKeyEvent(KEY_UP)
+        assert activity._selected == activity._ROW_SLEEP
+
+    def test_ok_advances_the_level_and_applies_it(self, install_mocks, mock_config,
+                                                  mock_hmi):
+        activity = _create_backlight(mock_config, level=0)
+        activity.onKeyEvent(KEY_OK)      # Low -> Middle
+        assert activity._level == 1
+        assert mock_config._store['backlight'] == 1
+        assert ('setbaklight', 50) in mock_hmi.calls
+        assert not activity.life.destroyed, 'OK must not leave the screen'
+
+    def test_m2_advances_like_ok(self, install_mocks, mock_config, mock_hmi):
+        activity = _create_backlight(mock_config, level=2)
+        activity.onKeyEvent(KEY_M2)      # High wraps to Low
+        assert activity._level == 0
+        assert ('setbaklight', 20) in mock_hmi.calls
+
+    def test_pwr_restores_the_opening_level_and_leaves(self, install_mocks,
+                                                       mock_config, mock_hmi):
+        activity = _create_backlight(mock_config, level=0)
+        activity.onKeyEvent(KEY_OK)      # preview Middle
+        activity.onKeyEvent(KEY_PWR)
+        assert ('setbaklight', 20) in mock_hmi.calls, 'the original level was not restored'
+        assert activity.life.destroyed
+
+
+# ---------------------------------------------------------------
+# The timeout
+# ---------------------------------------------------------------
+
+class TestScreenOff:
+
+    def test_the_row_shows_the_stored_timeout(self, install_mocks, mock_config):
+        activity = _create_backlight(mock_config, timeout=5)
+        assert resources.get_str('net_sleep') in _texts(activity)
+        assert '5 min' in _texts(activity)
+
+    def test_off_is_the_default(self, install_mocks, mock_config):
+        activity = _create_backlight(mock_config, timeout=0)
+        assert 'Off' in _texts(activity)
+
+    def test_ok_cycles_through_the_choices_and_persists(self, install_mocks,
+                                                        mock_config):
+        activity = _create_backlight(mock_config, timeout=0)
+        activity.onKeyEvent(KEY_DOWN)                # onto the Screen off row
+        assert activity._selected == activity._ROW_SLEEP
+        for expected in (1, 2, 5, 10, 0):
+            activity.onKeyEvent(KEY_OK)
+            assert activity._timeout == expected
+            assert mock_config._store['usb_net_link_timeout'] == expected
+
+    def test_choosing_the_timeout_does_not_touch_the_hardware(self, install_mocks,
+                                                              mock_config, mock_hmi):
+        """The watcher reads the setting on every poll; nothing is restarted."""
+        activity = _create_backlight(mock_config, level=1)
+        calls_before = list(mock_hmi.calls)
+        activity.onKeyEvent(KEY_DOWN)
+        activity.onKeyEvent(KEY_OK)
+        assert mock_hmi.calls == calls_before
+        assert not activity.life.destroyed
+
+
+def test_the_labels_fit_inside_a_row():
+    """Same character budget as the other two-row screens.
+
+    Measured on the device with the real fonts: 240 px per row, 30 px of
+    margins, and a value of up to six characters.
+    """
+    import json
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    for code, limit in {'en': 10, 'fr': 10, 'zh': 6}.items():
+        with open(os.path.join(root, 'data', 'lang', '%s.json' % code),
+                  encoding='utf-8') as handle:
+            pack = json.load(handle)
+        for key in ('backlight_level', 'net_sleep'):
+            label = pack['tipsmsg'][key]
+            assert len(label) <= limit, (code, key, label, limit)
