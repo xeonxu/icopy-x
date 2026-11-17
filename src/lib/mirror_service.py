@@ -342,7 +342,7 @@ class MirrorService:
         if name:
             try:
                 import keymap
-                keymap.key.onKey(name)
+                keymap.key.onKey(name, remote=True)
             except Exception as e:
                 log.error('Key injection failed: %s', e)
 

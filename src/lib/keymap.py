@@ -147,10 +147,12 @@ class KeyEvent:
         with self._lock:
             self._target = None
 
-    def onKey(self, event: str):
+    def onKey(self, event: str, remote: bool = False):
         """Called by HMI driver when key is pressed.
 
         *event* is a raw key code from hardware (e.g. ``'KEYOK_PRES!'``).
+        *remote* marks a press injected by the mirror client: it is dispatched
+        like any other key but does not count as panel activity.
         Translates via ``_compat()``, then dispatches to bound activity.
 
         Key dispatch is scheduled on the Tk main thread via root.after()
@@ -168,7 +170,7 @@ class KeyEvent:
         # panel and does what it normally does.
         try:
             from lib import linkwatch
-            linkwatch.get_watch().note_key()
+            linkwatch.get_watch().note_key(remote=remote)
         except Exception:
             pass
 

@@ -30,6 +30,9 @@ Two things count as "nobody is using it", and either one blanks the panel:
     the cable unplugged, where the gadget netdev has no carrier.
 
 The first key press turns the backlight back on and restarts both dwell times.
+Keys the mirror client injects are not that: they are the only input during a
+mirror session, so counting them would keep the panel lit for the whole session.
+They leave the dwell times alone and never wake a dark panel.
 Nothing about the network is retried or reverted because of this — it is a panel
 decision, not a link-health one.
 
@@ -180,8 +183,15 @@ class PanelSleep:
             self._set_blanked(False)
         return self.blanked != was_blanked
 
-    def note_key(self):
-        """A key press brings the panel back and restarts both dwell times."""
+    def note_key(self, remote=False):
+        """A key press brings the panel back and restarts both dwell times.
+
+        ``remote`` marks a press the mirror client injected. That operator is
+        looking at another screen, so the press says nothing about whether the
+        panel is being read: it neither wakes the panel nor keeps it awake.
+        """
+        if remote:
+            return False
         now = self.clock()
         with self._lock:
             self._last_key = now

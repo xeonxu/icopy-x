@@ -164,15 +164,60 @@ class TestKeyHook:
         calls = []
         monkeypatch.setattr(linkwatch, 'get_watch', lambda: _Recorder(calls))
         keymap.KeyEvent().onKey('KEYOK_PRES!')
-        assert calls == ['note_key'], 'the key never reached the panel watcher'
+        assert calls == [('note_key', False)], 'the key never reached the panel watcher'
+
+    def test_a_mirror_key_reaches_the_watcher_flagged(self, monkeypatch):
+        """The watcher must be able to tell a mirror press from a real one."""
+        import keymap
+
+        calls = []
+        monkeypatch.setattr(linkwatch, 'get_watch', lambda: _Recorder(calls))
+        keymap.KeyEvent().onKey('KEYOK_PRES!', remote=True)
+        assert calls == [('note_key', True)]
 
 
 class _Recorder:
     def __init__(self, calls):
         self.calls = calls
 
-    def note_key(self):
-        self.calls.append('note_key')
+    def note_key(self, remote=False):
+        self.calls.append(('note_key', remote))
+
+
+class TestMirrorKeys:
+    """A mirror session is not someone standing at the device."""
+
+    def test_a_mirror_key_leaves_a_dark_panel_dark(self):
+        clock = Clock()
+        watcher, actions = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(61)
+        watcher.poll()
+        assert watcher.blanked is True
+
+        assert watcher.note_key(remote=True) is False
+        assert watcher.blanked is True, 'a mirror key lit the panel'
+        assert actions['unblank'] == [], 'the backlight was raised for a mirror key'
+
+    def test_a_mirror_key_does_not_postpone_the_timeout(self):
+        """Otherwise a long mirror session keeps the panel lit for its whole run."""
+        clock = Clock()
+        watcher, actions = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(30)
+        watcher.note_key(remote=True)
+        clock.advance(31)
+        watcher.poll()
+        assert watcher.blanked is True, 'mirror keys kept the panel awake'
+
+    def test_a_key_on_the_device_still_wakes_it(self):
+        clock = Clock()
+        watcher, _ = _watch(clock, present=True)
+        watcher.poll()
+        clock.advance(61)
+        watcher.poll()
+        assert watcher.note_key(remote=False) is True
+        assert watcher.blanked is False
 
 
 class TestIdle:
