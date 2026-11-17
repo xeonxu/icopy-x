@@ -1078,8 +1078,11 @@ class NetworkActivity(BaseActivity):
         return list(values)[(index + 1) % len(values)]
 
     def _activate(self):
-        """Cycle the value of the selected row and apply it."""
+        """Cycle the selected row and apply it; the Status row refreshes instead."""
         row = self._selected
+        if row == self._ROW_STATUS:
+            self._refresh_from_device()
+            return
         if not self._is_enabled(row):
             return
 
@@ -1107,6 +1110,26 @@ class NetworkActivity(BaseActivity):
             return
 
         self._apply()
+
+    def _refresh_from_device(self):
+        """Re-read the saved profile and the live status, and redraw.
+
+        Field ask: a press on the Status row must ask the device again instead of
+        waiting for the poll. Nothing is written - the row stays read-only - but
+        the link can change while the screen is open (a lease arriving, the host
+        restarting its sharing), and this is the operator's way to say "now".
+        """
+        try:
+            import settings as _settings
+            self._role = _settings.getUsbNetRole()
+            self._driver = _settings.getUsbNetDriver()
+            self._subnet = _settings.getUsbNetSubnet()
+            self._client_network = _settings.getUsbNetClientNetwork()
+            self._octet = _settings.getUsbNetFixedOctet()
+        except Exception:
+            pass
+        self._status = self._read_status()
+        self._render()
 
     def _apply(self):
         """Persist the profile, re-apply it live, and show the new status."""

@@ -291,3 +291,21 @@ def test_leaving_the_screen_stops_the_poll(state):
                                'msg': 'lease 192.168.137.2'}
     canvas.advance(activity._STATUS_POLL_MS * 4)
     assert '192.168.137.2/24' not in _texts(canvas), 'a paused screen kept repainting'
+
+
+def test_the_status_row_refreshes_from_the_device(state):
+    """Field ask: OK on Status must ask the device again, not do nothing."""
+    activity = _open()
+    assert '10.1.1.1/24' in _texts(activity.getCanvas())
+
+    # The link changed while the screen was open: the client got its lease.
+    state['status']['value'] = {'role': 'client', 'address': '192.168.137.2/24',
+                               'msg': 'lease 192.168.137.2'}
+    state['values']['role'] = 1
+
+    activity._selected = activity._ROW_STATUS
+    activity.onKeyEvent(KEY_OK)
+
+    texts = _texts(activity.getCanvas())
+    assert '192.168.137.2/24' in texts, 'the Status row did not ask the device again'
+    assert state['calls'] == [], 'refreshing the status wrote a profile'
