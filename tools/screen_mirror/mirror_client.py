@@ -41,6 +41,9 @@ Dependencies:
 
 import argparse
 import logging
+import os
+import select
+import socket
 import struct
 import sys
 import threading
@@ -49,18 +52,30 @@ import tkinter as tk
 import zlib
 from pathlib import Path
 
+def _require(package, import_error):
+    """Report a missing dependency against the interpreter that is running us.
+
+    "pip install ..." alone is not enough advice: the usual failure is a second
+    interpreter (system python vs a venv) that does not have the package.
+    """
+    print("Error: %s is required but missing from this interpreter." % package)
+    print("       interpreter: %s" % sys.executable)
+    print("       install:     %s -m pip install %s" % (sys.executable, package))
+    if import_error is not None:
+        print("       (%s)" % import_error)
+    sys.exit(1)
+
+
 try:
     from PIL import Image, ImageTk
-except ImportError:
-    print("Error: Pillow is required. Install with: pip install pillow")
-    sys.exit(1)
+except ImportError as exc:
+    _require("pillow", exc)
 
 try:
     import serial
     import serial.tools.list_ports
-except ImportError:
-    print("Error: pyserial is required. Install with: pip install pyserial")
-    sys.exit(1)
+except ImportError as exc:
+    _require("pyserial", exc)
 
 try:
     import numpy as np
@@ -112,8 +127,30 @@ DEFAULT_HEIGHT = 240
 BAUD_RATE = 115200
 SERIAL_TIMEOUT = 1.0
 
+# Ethernet transport (mirror over the RNDIS link): pass "host:port" instead of a
+# COM port. The default is the address a device keeps when nobody changed its
+# network profile: the Gateway role on 10.1.1.0/24. Pick another Range, or let
+# the device take a lease from the host, and its address moves - read it in
+# Settings -> Network on the device and pass it, or set $ICOPY_MIRROR_TCP.
+DEFAULT_TCP = '10.1.1.1:7767'
+TCP_CONNECT_TIMEOUT = 2.0
+
+
+def link_target(explicit=None):
+    """host:port of the Ethernet link.
+
+    Precedence: the command line, then $ICOPY_MIRROR_TCP, then the default
+    Gateway address. A device whose profile changed answers at neither of the
+    latter, so the operator passes the address shown in Settings -> Network.
+    """
+    return explicit or os.environ.get('ICOPY_MIRROR_TCP') or DEFAULT_TCP
+
 # Reconnect interval (seconds)
 RECONNECT_INTERVAL = 2.0
+
+# A live mirror streams continuously (one frame per ACK), so silence means the
+# session is dead. Serial hosts never deliver EOF, hence the timeout.
+STALL_TIMEOUT = 10.0
 
 # Window surround: the mask's cyan regions are painted in a colour the window
 # manager can key out. Only Windows implements '-transparentcolor'; elsewhere
@@ -250,6 +287,70 @@ def parse_header(data):
 # Serial communication thread
 # ---------------------------------------------------------------------------
 
+class SocketTransport:
+    """Serial-like wrapper around a TCP socket (Ethernet mirror).
+
+    Exposes only the surface the connection uses — write/read/in_waiting/close —
+    so the framing code is shared with the USB-serial transport.
+    """
+
+    def __init__(self, sock):
+        self._sock = sock
+        self.is_open = True
+
+    @property
+    def in_waiting(self):
+        """Bytes ready to read.
+
+        The frame loop reads ``in_waiting`` bytes per iteration, so reporting a
+        bare "1" throttles it to one byte per poll (a few bytes per second).
+        Report a large batch and let recv() return what is available.
+        """
+        ready, _, _ = select.select([self._sock], [], [], 0)
+        return 65536 if ready else 0
+
+    def read(self, count):
+        """Read from the socket; raise when the peer is gone.
+
+        recv() returns b'' at EOF, which is indistinguishable from "no bytes
+        right now" — the frame loop would spin on the dead socket forever and
+        never reconnect (the window keeps the last frame). Raising an OSError
+        subclass makes the caller treat it as a disconnect.
+        """
+        try:
+            chunk = self._sock.recv(max(1, count))
+        except (socket.timeout, BlockingIOError):
+            return b''
+        if not chunk:
+            raise ConnectionError('peer closed the connection')
+        return chunk
+
+    def write(self, data):
+        self._sock.sendall(data)
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def reset_input_buffer(self):
+        timeout = self._sock.gettimeout()
+        self._sock.settimeout(0)
+        try:
+            while self._sock.recv(4096):
+                pass
+        except (BlockingIOError, socket.timeout, OSError):
+            pass
+        finally:
+            self._sock.settimeout(timeout)
+
+    def close(self):
+        self.is_open = False
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 class SerialConnection:
     """Manages serial communication with the iCopy-X device."""
 
@@ -332,7 +433,20 @@ class SerialConnection:
                     self.on_disconnected()
 
     def _open_port(self, port):
-        """Try to open a serial port. Returns True on success."""
+        """Open a serial port, or a TCP endpoint given as "host:port"."""
+        if ':' in str(port):
+            try:
+                host, _, port_s = str(port).rpartition(':')
+                sock = socket.create_connection((host, int(port_s)),
+                                                timeout=TCP_CONNECT_TIMEOUT)
+                sock.settimeout(SERIAL_TIMEOUT)
+                self.ser = SocketTransport(sock)
+                log.info("Connected to %s", port)
+                return True
+            except (OSError, ValueError) as exc:
+                log.debug("Could not connect to %s: %s", port, exc)
+                self.ser = None
+                return False
         try:
             self.ser = serial.Serial(
                 port=port,
@@ -348,7 +462,11 @@ class SerialConnection:
             return False
 
     def _auto_detect_port(self):
-        """Scan available serial ports and try to find the iCopy-X device."""
+        """Find the device, preferring the Ethernet link over a COM port."""
+        target = link_target()
+        if self._try_handshake(target):
+            return target
+
         ports = serial.tools.list_ports.comports()
         candidates = []
         for p in ports:
@@ -448,8 +566,12 @@ class SerialConnection:
     def _frame_loop(self):
         """Read and dispatch frames until disconnect or stop."""
         buf = b''
+        last_progress = time.monotonic()
         while self._running and self._connected:
             try:
+                if time.monotonic() - last_progress > STALL_TIMEOUT:
+                    log.warning('No data for %.0fs — reconnecting', STALL_TIMEOUT)
+                    break
                 time.sleep(0.05)
                 if not self.ser:
                     break
@@ -459,6 +581,7 @@ class SerialConnection:
                 chunk = self.ser.read(waiting)
                 if not chunk:
                     continue
+                last_progress = time.monotonic()
                 buf += chunk
                 log.debug("Read %d bytes (buf=%d)", len(chunk), len(buf))
             except (serial.SerialException, OSError) as exc:
@@ -833,7 +956,20 @@ class MirrorApp:
 
     def _on_disconnected(self):
         """Called when device connection is lost."""
-        self._update_status("Disconnected")
+        self._update_status("Disconnected — reconnecting...")
+        self.root.after(0, self._clear_screen)
+
+    def _clear_screen(self):
+        """Blank the stale frame so a frozen picture is never mistaken for live.
+
+        Must run on the Tk thread.
+        """
+        try:
+            self.canvas.itemconfigure(self._screen_id, image='')
+            self.canvas.itemconfigure(self._status_id, state=tk.NORMAL)
+            log.info('Screen cleared — waiting for the device')
+        except tk.TclError:
+            pass
 
     def _on_close(self):
         """Handle window close."""
@@ -884,7 +1020,12 @@ def parse_args():
     )
     parser.add_argument(
         'port', nargs='?', default=None,
-        help='Serial port (e.g. /dev/ttyACM0, COM3). Auto-detect if omitted.',
+        help='Serial port (e.g. /dev/ttyACM0, COM3) or "host:port" for the '
+             'Ethernet link. Auto-detect if omitted: the Ethernet link is '
+             'tried first (the address in $ICOPY_MIRROR_TCP, else the default '
+             'Gateway address 10.1.1.1:7767), then the serial ports. After '
+             'changing the device network profile, pass the address shown in '
+             'Settings -> Network.',
     )
     parser.add_argument(
         '--assets-dir', default=None,

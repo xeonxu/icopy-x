@@ -474,6 +474,8 @@ class SettingsMenuActivity(BaseActivity):
     Rows:
         Screen Mirroring — label on the left, enabled/disabled icon on the
                            right; OK toggles it in place.
+        Mirror Link      — which link the mirror service uses: the USB serial
+                           gadget or the network (RNDIS/TCP).
         Language         — label on the left, active language name on the
                            right; OK opens LanguageActivity to pick one.
         Network          — opens NetworkActivity (USB network profiles).
@@ -499,17 +501,22 @@ class SettingsMenuActivity(BaseActivity):
 
     # Row indices
     _ROW_MIRROR = 0
-    _ROW_LANGUAGE = 1
-    _ROW_NETWORK = 2
-    _ROW_SHUTDOWN = 3
-    _ROW_REBOOT = 4
-    _ROW_COUNT = 5
+    _ROW_TRANSPORT = 1
+    _ROW_LANGUAGE = 2
+    _ROW_NETWORK = 3
+    _ROW_SHUTDOWN = 4
+    _ROW_REBOOT = 5
+    _ROW_COUNT = 6
+
+    # Row value strings, indexed by settings.getMirrorTransport().
+    _TRANSPORT_KEYS = ('link_serial', 'link_ethernet')
 
     # Rows that fit between the title bar and the bottom edge.
     _VISIBLE_ROWS = 5
 
     _LABEL_KEYS = {
         _ROW_MIRROR: 'screen_mirroring',
+        _ROW_TRANSPORT: 'mirror_transport',
         _ROW_LANGUAGE: 'language',
         _ROW_NETWORK: 'network',
         _ROW_SHUTDOWN: 'shutdown',
@@ -518,6 +525,7 @@ class SettingsMenuActivity(BaseActivity):
 
     def __init__(self, bundle=None):
         self._mirror_state = False
+        self._transport = 0       # 0 = USB serial gadget, 1 = network (TCP)
         self._selected = 0
         self._tk_img = None  # prevent GC of PhotoImage
         super().__init__(bundle)
@@ -544,6 +552,12 @@ class SettingsMenuActivity(BaseActivity):
             self._mirror_state = bool(_settings.getScreenMirror())
         except Exception:
             self._mirror_state = False
+
+        try:
+            import settings as _settings
+            self._transport = int(_settings.getMirrorTransport())
+        except Exception:
+            self._transport = 0
 
         self._render()
 
@@ -589,6 +603,9 @@ class SettingsMenuActivity(BaseActivity):
 
     def _value(self, row):
         """Right-hand text of a row; the mirror row draws an icon instead."""
+        if row == self._ROW_TRANSPORT:
+            index = self._transport if self._transport in (0, 1) else 0
+            return resources.get_str(self._TRANSPORT_KEYS[index])
         if row == self._ROW_LANGUAGE:
             return self._current_language_name()
         return ''
@@ -704,6 +721,17 @@ class SettingsMenuActivity(BaseActivity):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _toggle_transport(self):
+        """Switch the mirror link and restart the service if it is running."""
+        self._transport = 1 - self._transport
+        try:
+            import settings as _settings
+            _settings.setMirrorTransport(self._transport)
+        except Exception:
+            pass
+        self._render()
+        self._apply_mirror(restart=True)
+
     def _power(self, action):
         """Shut the device down or restart it; the menu row is the confirmation."""
         try:
@@ -722,6 +750,8 @@ class SettingsMenuActivity(BaseActivity):
         elif key == KEY_OK:
             if self._selected == self._ROW_MIRROR:
                 self._toggle_mirror()
+            elif self._selected == self._ROW_TRANSPORT:
+                self._toggle_transport()
             elif self._selected == self._ROW_LANGUAGE:
                 actstack.start_activity(LanguageActivity)
             elif self._selected == self._ROW_NETWORK:

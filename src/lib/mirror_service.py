@@ -43,6 +43,7 @@ Transport:
 import logging
 import os
 import select
+import socket
 import struct
 import threading
 import time
@@ -52,6 +53,9 @@ log = logging.getLogger(__name__)
 
 MAGIC = b'\x49\x43'
 MSG_FRAME = 0x01
+
+# The frame header carries the payload length in two bytes.
+MAX_PAYLOAD = 0xFFFF
 MSG_KEY = 0x02
 MSG_ACK = 0x03
 MSG_HELLO = 0x04
@@ -68,9 +72,55 @@ SERIAL_PATH = '/dev/ttyGS0'
 SCREEN_W = 240
 SCREEN_H = 240
 
+# Transports. The serial gadget needs the USB device controller, which means it
+# displaces the RNDIS network (and the host needs a COM port). The Ethernet
+# transport rides on the RNDIS link instead: RNDIS stays bound, the network
+# keeps working while mirroring, and the host only needs a TCP socket.
+TRANSPORT_SERIAL = 0
+TRANSPORT_ETHERNET = 1
+TCP_BIND_INTERFACE = 'usb0'        # the RNDIS link; its address follows the
+                                   # network profile, so the socket is pinned to
+                                   # the interface instead of an address
+TCP_PORT = 7767
+
+
+def bind_link(sock, port=TCP_PORT):
+    """Bind *sock* to the USB link, whatever address the profile gave it.
+
+    The link's address is not fixed: the Gateway role uses the Range the
+    operator picks (10.1.1.0/24 by default) and the Client role uses whatever
+    the host hands out. Pinning the socket to the interface keeps the mirror
+    listener correct in all of them, and the host only has to be told the
+    address shown in Settings -> Network.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                        (TCP_BIND_INTERFACE + '\0').encode('ascii'))
+    except (AttributeError, OSError) as e:
+        # Not Linux, or not permitted: fall back to every interface rather than
+        # losing the mirror.
+        log.warning('mirror tcp: cannot pin to %s (%s); listening on all '
+                    'interfaces', TCP_BIND_INTERFACE, e)
+    sock.bind(('0.0.0.0', port))
+
 # A connected client requests frames continuously, so silence means it is gone.
 # Hosts do not deliver EOF when they close a CDC ACM port, hence the timeout.
 IDLE_TIMEOUT = 5.0
+
+
+def encode_frame(frame, level=6):
+    """Compress one framebuffer read into a payload the header can carry.
+
+    A frame the panel never shows in practice can still compress past the
+    two-byte length field - a garbled read, or a photo drawn over the UI - and
+    packing the length then raised inside the session, which dropped the client.
+    Spending more CPU on that frame, and skipping it when even that is not
+    enough, keeps the session alive; the next frame carries the screen again.
+    """
+    payload = zlib.compress(frame, level)
+    if len(payload) > MAX_PAYLOAD:
+        payload = zlib.compress(frame, 9)
+    return payload if len(payload) <= MAX_PAYLOAD else None
 
 
 class MirrorService:
@@ -80,20 +130,34 @@ class MirrorService:
         self._thread = None
         self._fd = None
         self._fb_fd = None
+        self._transport = TRANSPORT_SERIAL
+        self._listener = None
 
-    def start(self):
+    def start(self, transport=None):
+        """Serve the framebuffer over the configured transport.
+
+        Args:
+            transport: TRANSPORT_SERIAL / TRANSPORT_ETHERNET, or None to read
+                the saved setting (serial when it cannot be read).
+        """
         if self._running:
             return
-        self._load_gadget()
+        if transport is None:
+            transport = _configured_transport()
+        self._transport = transport
+        if transport == TRANSPORT_SERIAL:
+            self._load_gadget()
         try:
             self._fb_fd = open(FB_PATH, 'rb')
         except Exception as e:
             log.error('Cannot open framebuffer %s: %s', FB_PATH, e)
             self._fb_fd = None
         self._running = True
-        self._thread = threading.Thread(target=self._serve_loop, daemon=True)
+        target = self._serve_loop if transport == TRANSPORT_SERIAL else self._serve_tcp_loop
+        self._thread = threading.Thread(target=target, daemon=True)
         self._thread.start()
-        log.info('MirrorService started')
+        log.info('MirrorService started (%s)',
+                 'serial' if transport == TRANSPORT_SERIAL else 'ethernet')
 
     def stop(self):
         self._running = False
@@ -104,6 +168,13 @@ class MirrorService:
                 os.close(fd)
             except Exception:
                 pass
+        listener = self._listener
+        if listener is not None:
+            try:
+                listener.close()
+            except Exception:
+                pass
+            self._listener = None
         if self._thread:
             self._thread.join(timeout=3)
             self._thread = None
@@ -113,7 +184,8 @@ class MirrorService:
             except Exception:
                 pass
             self._fb_fd = None
-        self._unload_gadget()
+        if self._transport == TRANSPORT_SERIAL:
+            self._unload_gadget()
         log.info('MirrorService stopped')
 
     @property
@@ -157,6 +229,52 @@ class MirrorService:
             if self._running:
                 time.sleep(1)
 
+    def _serve_tcp_loop(self):
+        """Serve frames over TCP on the RNDIS link.
+
+        No USB gadget is touched: the PC reaches us on usb0, so mirroring and
+        the network coexist. Each connection is handled with the same framing
+        as the serial path — _handle() works on any fd.
+        """
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            bind_link(srv)
+            srv.listen(1)
+            srv.settimeout(0.5)
+        except Exception as e:
+            log.error('mirror tcp: cannot listen on %s:%d: %s',
+                      TCP_BIND_INTERFACE, TCP_PORT, e)
+            self._running = False
+            return
+
+        self._listener = srv
+        log.info('mirror tcp: listening on %s:%d', TCP_BIND_INTERFACE, TCP_PORT)
+        try:
+            while self._running:
+                try:
+                    conn, addr = srv.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                log.info('mirror tcp: client %s', addr)
+                try:
+                    self._handle(conn.fileno())
+                except Exception as e:
+                    log.error('mirror tcp: session error: %s', e)
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                srv.close()
+            except Exception:
+                pass
+            self._listener = None
+
     def _session(self):
         for _ in range(20):
             if not self._running:
@@ -198,8 +316,9 @@ class MirrorService:
             if msg_type == MSG_ACK:
                 data = self._grab_frame()
                 if data:
-                    compressed = zlib.compress(data, 6)
-                    self._send(fd, MSG_FRAME, compressed)
+                    payload = encode_frame(data)
+                    if payload:
+                        self._send(fd, MSG_FRAME, payload)
 
             elif msg_type == MSG_KEY:
                 if payload and len(payload) >= 1:
@@ -280,6 +399,15 @@ class MirrorService:
 
 
 _instance = None
+
+
+def _configured_transport():
+    """Saved transport, falling back to serial when settings are unavailable."""
+    try:
+        import settings
+        return int(settings.getMirrorTransport())
+    except Exception:
+        return TRANSPORT_SERIAL
 
 
 def get_service():

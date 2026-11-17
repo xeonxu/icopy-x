@@ -191,7 +191,10 @@
         "ota_battery_tips3": "请连接充电器。",
         "ota_battery_tips4": "充电状态：{}",
         "ota_battery_tips5": "电量百分比：{}",
-        "no_tag_history": "无卡片信息。\n仅支持：\n.bin .eml .txt"
+        "no_tag_history": "无卡片信息。\n仅支持：\n.bin .eml .txt",
+        "mirror_transport": "镜像链路？",
+        "link_serial": "串口",
+        "link_ethernet": "以太网"
     },
     "procbarmsg": {
         "reading": "读取中...",
