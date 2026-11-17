@@ -10,10 +10,10 @@
 #
 # The script is idempotent: it tears down every gadget function it finds, not
 # just the one it is about to build, so a half-switched state cannot survive.
-G=/sys/kernel/config/usb_gadget/icopy
-CONF=/etc/icopy/rndis.conf
-STATUS=/run/icopy-net.status
-DNSMASQ_CONF=/run/icopy-dnsmasq.conf
+G=${ICOPY_GADGET_DIR:-/sys/kernel/config/usb_gadget/icopy}
+CONF=${ICOPY_NET_CONF:-/etc/icopy/rndis.conf}
+STATUS=${ICOPY_NET_STATUS:-/run/icopy-net.status}
+DNSMASQ_CONF=${ICOPY_DNSMASQ_CONF:-/run/icopy-dnsmasq.conf}
 
 # ---- defaults: byte-for-byte the behaviour of the first release -------------
 driver=rndis
@@ -59,76 +59,102 @@ status() {
     } > "$STATUS"
 }
 
-mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
-
-# ---- tear down whatever is there -------------------------------------------
-if [ -d "$G" ]; then
-    echo "" > "$G/UDC" 2>/dev/null || true
-    for link in "$G"/configs/c.1/*; do
-        [ -L "$link" ] && rm -f "$link"
-    done
-    for function in "$G"/functions/*; do
-        [ -d "$function" ] || continue
-        for group in "$function"/os_desc/interface.*; do
-            [ -d "$group" ] && rmdir "$group" 2>/dev/null
-        done
-        rmdir "$function/os_desc" "$function" 2>/dev/null || true
-    done
-    rm -f "$G/os_desc/c.1" 2>/dev/null || true
-    rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" "$G/strings/0x409" \
-          "$G/os_desc" "$G" 2>/dev/null || true
-fi
-
-for module in g_ether g_serial g_acm_ms g_mass_storage; do
-    modprobe -r "$module" 2>/dev/null || true
-done
-
-# ---- build the requested function ------------------------------------------
-mkdir -p "$G"
-echo 0x1d6b > "$G/idVendor"
-echo 0x0104 > "$G/idProduct"
-echo 0x0100 > "$G/bcdDevice"
-echo 0x0201 > "$G/bcdUSB"
-mkdir -p "$G/strings/0x409"
-echo "icopyx-0001" > "$G/strings/0x409/serialnumber"
-echo "Lab401" > "$G/strings/0x409/manufacturer"
-echo "$PRODUCT" > "$G/strings/0x409/product"
-
 FUNCTION_DIR="$G/functions/$FUNCTION"
-mkdir -p "$FUNCTION_DIR"
-case "$driver" in
-    rndis)
-        # The vendor kernel defaults these to CDC-ECM (02/06/00), which Windows
-        # cannot drive; RNDIS needs e0/01/03.
-        echo e0 > "$FUNCTION_DIR/class"
-        echo 01 > "$FUNCTION_DIR/subclass"
-        echo 03 > "$FUNCTION_DIR/protocol"
-        ;;
-esac
-echo "02:11:22:33:44:55" > "$FUNCTION_DIR/dev_addr"
-echo "02:11:22:33:44:66" > "$FUNCTION_DIR/host_addr"
+NET_SYSFS=${ICOPY_NET_SYSFS:-/sys/class/net}
 
-if [ "$NEEDS_OS_DESC" = "1" ]; then
-    # What makes Windows bind without a driver: USB\MS_COMP_RNDIS. The kernel
-    # refuses an MS OS descriptor on the ecm/ncm functions, and macOS does not
-    # use one, so only RNDIS writes it.
-    mkdir -p "$FUNCTION_DIR/os_desc/interface.rndis"
-    echo "RNDIS" > "$FUNCTION_DIR/os_desc/interface.rndis/compatible_id" 2>/dev/null || true
-    echo "5162001" > "$FUNCTION_DIR/os_desc/interface.rndis/sub_compatible_id" 2>/dev/null || true
-    echo 1 > "$G/os_desc/use" 2>/dev/null || true
+# ---- is the running gadget already the one we want? -------------------------
+# Switching role keeps the same USB function, so rebuilding the gadget would
+# only make the host re-enumerate the interface - which restarts its internet
+# sharing and, with it, the very DHCP server the client role is waiting for.
+# Reuse the bound gadget when it already provides this function; only a driver
+# change needs a new device.
+reuse=0
+if [ -s "$G/UDC" ] && [ -L "$G/configs/c.1/$FUNCTION" ] && [ -d "$FUNCTION_DIR" ]; then
+    reuse=1
+    if [ "$NEEDS_OS_DESC" = "1" ] && [ ! -d "$FUNCTION_DIR/os_desc/interface.rndis" ]; then
+        reuse=0
+    fi
 fi
 
-mkdir -p "$G/configs/c.1/strings/0x409"
-echo "$driver" > "$G/configs/c.1/strings/0x409/configuration"
-ln -s "$FUNCTION_DIR" "$G/configs/c.1/" 2>/dev/null || true
-if [ "$NEEDS_OS_DESC" = "1" ]; then
-    ln -s "$G/configs/c.1" "$G/os_desc/c.1" 2>/dev/null || true
+if [ ! -e "$G" ]; then
+    mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 fi
 
-if ! echo musb-hdrc.4.auto > "$G/UDC"; then
-    status "none" "udc bind failed"
-    echo "RNDIS gadget: UDC bind failed" >&2
-    exit 1
+build_gadget() {
+    # ---- tear down whatever is there -------------------------------------------
+    if [ -d "$G" ]; then
+        echo "" > "$G/UDC" 2>/dev/null || true
+        for link in "$G"/configs/c.1/*; do
+            [ -L "$link" ] && rm -f "$link"
+        done
+        for function in "$G"/functions/*; do
+            [ -d "$function" ] || continue
+            for group in "$function"/os_desc/interface.*; do
+                [ -d "$group" ] && rmdir "$group" 2>/dev/null
+            done
+            rmdir "$function/os_desc" "$function" 2>/dev/null || true
+        done
+        rm -f "$G/os_desc/c.1" 2>/dev/null || true
+        rmdir "$G/configs/c.1/strings/0x409" "$G/configs/c.1" "$G/strings/0x409" \
+              "$G/os_desc" "$G" 2>/dev/null || true
+    fi
+
+    for module in g_ether g_serial g_acm_ms g_mass_storage; do
+        modprobe -r "$module" 2>/dev/null || true
+    done
+
+    # ---- build the requested function ------------------------------------------
+    mkdir -p "$G"
+    echo 0x1d6b > "$G/idVendor"
+    echo 0x0104 > "$G/idProduct"
+    echo 0x0100 > "$G/bcdDevice"
+    echo 0x0201 > "$G/bcdUSB"
+    mkdir -p "$G/strings/0x409"
+    echo "icopyx-0001" > "$G/strings/0x409/serialnumber"
+    echo "Lab401" > "$G/strings/0x409/manufacturer"
+    echo "$PRODUCT" > "$G/strings/0x409/product"
+
+    mkdir -p "$FUNCTION_DIR"
+    case "$driver" in
+        rndis)
+            # The vendor kernel defaults these to CDC-ECM (02/06/00), which Windows
+            # cannot drive; RNDIS needs e0/01/03.
+            echo e0 > "$FUNCTION_DIR/class"
+            echo 01 > "$FUNCTION_DIR/subclass"
+            echo 03 > "$FUNCTION_DIR/protocol"
+            ;;
+    esac
+    echo "02:11:22:33:44:55" > "$FUNCTION_DIR/dev_addr"
+    echo "02:11:22:33:44:66" > "$FUNCTION_DIR/host_addr"
+
+    if [ "$NEEDS_OS_DESC" = "1" ]; then
+        # What makes Windows bind without a driver: USB\MS_COMP_RNDIS. The kernel
+        # refuses an MS OS descriptor on the ecm/ncm functions, and macOS does not
+        # use one, so only RNDIS writes it.
+        mkdir -p "$FUNCTION_DIR/os_desc/interface.rndis"
+        echo "RNDIS" > "$FUNCTION_DIR/os_desc/interface.rndis/compatible_id" 2>/dev/null || true
+        echo "5162001" > "$FUNCTION_DIR/os_desc/interface.rndis/sub_compatible_id" 2>/dev/null || true
+        echo 1 > "$G/os_desc/use" 2>/dev/null || true
+    fi
+
+    mkdir -p "$G/configs/c.1/strings/0x409"
+    echo "$driver" > "$G/configs/c.1/strings/0x409/configuration"
+    ln -s "$FUNCTION_DIR" "$G/configs/c.1/" 2>/dev/null || true
+    if [ "$NEEDS_OS_DESC" = "1" ]; then
+        ln -s "$G/configs/c.1" "$G/os_desc/c.1" 2>/dev/null || true
+    fi
+
+    if ! echo musb-hdrc.4.auto > "$G/UDC"; then
+        status "none" "udc bind failed"
+        echo "RNDIS gadget: UDC bind failed" >&2
+        exit 1
+    fi
+}
+
+if [ "$reuse" = "1" ]; then
+    echo "USB network: keeping the bound $driver gadget, no USB re-enumeration"
+else
+    build_gadget
 fi
 
 # ---- resolve the netdev the function created --------------------------------
@@ -138,9 +164,9 @@ fi
 NETDEV=""
 i=0
 while [ $i -lt 25 ] && [ -z "$NETDEV" ]; do
-    [ -e /sys/class/net/usb0 ] && NETDEV=usb0
+    [ -e "$NET_SYSFS/usb0" ] && NETDEV=usb0
     if [ -z "$NETDEV" ]; then
-        for candidate in /sys/class/net/*; do
+        for candidate in "$NET_SYSFS"/*; do
             name=${candidate##*/}
             case "$name" in lo|eth0) continue ;; esac
             case "$(readlink -f "$candidate/device" 2>/dev/null)" in
@@ -171,6 +197,9 @@ if [ "$role" = "client" ]; then
 fi
 
 # ---- gateway role: address + DHCP server ------------------------------------
+# Leaving the client role behind means dropping its DHCP client: a live
+# `udhcpc -b` would keep renewing (and re-adding) the host's address.
+systemctl --no-block stop icopy-net.service >/dev/null 2>&1 || true
 netmask=$(ipcalc -n -m "$device_ip/24" 2>/dev/null | sed -n 's/^Netmask=//p')
 [ -n "$netmask" ] || netmask=255.255.255.0
 case "$subnet" in
