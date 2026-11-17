@@ -214,7 +214,13 @@ ip addr add "$device_ip/$prefix" dev "$NETDEV" 2>/dev/null || true
     echo "interface=$NETDEV"
     echo "bind-interfaces"
     echo "dhcp-range=$pool_start,$pool_end,$netmask,$lease"
-    echo "dhcp-option=3,$device_ip"
+    # No default route for the host: the device has no uplink and no NAT, so
+    # advertising itself as the gateway only hijacked the host's internet.
+    # Windows installed 0.0.0.0/0 via usb0 (metric 25) in preference to the
+    # Wi-Fi gateway (metric 35) and every packet left through a dead end.
+    # An empty value is what suppresses the option - dnsmasq sends its own
+    # address as the router when option 3 is missing altogether.
+    echo "dhcp-option=3"
     echo "dhcp-option=1,$netmask"
     echo "dhcp-option=28,$(echo "$device_ip" | awk -F. '{printf "%s.%s.%s.255", $1, $2, $3}')"
     echo "no-resolv"

@@ -120,6 +120,24 @@ def test_the_gateway_role_takes_the_link_back_from_the_client(tmp_path):
     assert 'address=10.1.1.1/24' in status.read_text()
 
 
+def test_the_lease_does_not_make_the_device_the_hosts_gateway(tmp_path):
+    """The device has no uplink: a router option sends the host's traffic nowhere.
+
+    Measured on a Windows host: 0.0.0.0/0 via usb0 (metric 25) won over the
+    Wi-Fi gateway (metric 35), so the PC lost internet whenever it held a lease.
+    """
+    gadget = _gadget(tmp_path, 'rndis.usb0')
+    _run(tmp_path, gadget, 'rndis', 'gateway')
+
+    conf = (tmp_path / 'dnsmasq.conf').read_text()
+    assert 'dhcp-range=' in conf, 'the DHCP server was not configured at all'
+    gateways = [line for line in conf.splitlines()
+                if line.startswith('dhcp-option=3,') or line.startswith('dhcp-option=option:router,')]
+    assert not gateways, 'the device still advertises a gateway: %s' % gateways
+    assert 'dhcp-option=3' in conf, \
+        'option 3 must be present and empty: dnsmasq defaults it to its own address'
+
+
 def test_a_driver_change_rebuilds_the_gadget(tmp_path):
     """A different function is a different USB device: this one must be rebuilt."""
     gadget = _gadget(tmp_path, 'ecm.usb0')
