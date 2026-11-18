@@ -831,6 +831,9 @@ class NetworkActivity(BaseActivity):
     _ROW_STATUS = 4
     _ROW_COUNT = 5
 
+    # Every row fits between the title bar and the bottom edge.
+    _VISIBLE_ROWS = _ROW_COUNT
+
     # Status file poll interval: the address appears a few seconds after a role
     # or profile change, so the row has to catch up on its own.
     _STATUS_POLL_MS = 500
@@ -1043,7 +1046,8 @@ class NetworkActivity(BaseActivity):
         if canvas is None:
             return
 
-        self.setTitle(resources.get_str('network'))
+        self.setTitle(page_title(resources.get_str('network'), self._selected,
+                                 self._ROW_COUNT, self._VISIBLE_ROWS))
         self.setLeftButton('')
         self.setRightButton('')
 
@@ -1171,14 +1175,12 @@ class NetworkActivity(BaseActivity):
         self._render()
 
     def onKeyEvent(self, key):
-        if key == KEY_UP:
-            if self._selected > 0:
-                self._selected -= 1
-                self._render()
-        elif key == KEY_DOWN:
-            if self._selected < self._ROW_COUNT - 1:
-                self._selected += 1
-                self._render()
+        if key in (KEY_UP, KEY_DOWN):
+            # Wrap like the main menu and the Settings list: the operator never
+            # has to count moves to reach the last row.
+            step = -1 if key == KEY_UP else 1
+            self._selected = (self._selected + step) % self._ROW_COUNT
+            self._render()
         elif key == KEY_OK:
             self._activate()
         elif key == KEY_PWR:

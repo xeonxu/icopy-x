@@ -309,3 +309,22 @@ def test_the_status_row_refreshes_from_the_device(state):
     texts = _texts(activity.getCanvas())
     assert '192.168.137.2/24' in texts, 'the Status row did not ask the device again'
     assert state['calls'] == [], 'refreshing the status wrote a profile'
+
+
+def test_the_selection_wraps_at_both_ends(state):
+    activity = _open()
+    last = activity._ROW_COUNT - 1
+
+    _press(activity, KEY_UP)
+    assert activity._selected == last, 'UP on the first row must land on the last'
+
+    _press(activity, KEY_DOWN)
+    assert activity._selected == 0, 'DOWN on the last row must return to the first'
+
+
+def test_the_title_carries_the_page_indicator(state):
+    activity = _open()
+    canvas = activity.getCanvas()
+    indicator = [canvas.itemcget(item, 'text')
+                 for item in canvas.find_withtag('page_indicator:top')]
+    assert indicator == ['1/1'], 'five rows fit, and the title must say so'
