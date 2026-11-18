@@ -40,7 +40,6 @@ class TestSettingsAccessors:
         assert settings.getUsbNetDriver() == netconfig.DRIVER_RNDIS
         assert settings.getUsbNetSubnet() == 0
         assert settings.getUsbNetFixedOctet() == 2
-        assert settings.getUsbNetLinkTimeout() == 0
 
     def test_a_corrupted_value_falls_back_to_the_default(self, conf):
         conf['usb_net_driver'] = '99'
@@ -56,10 +55,8 @@ class TestSettingsAccessors:
         settings.setUsbNetSubnet(2)
         settings.setUsbNetClientNetwork(2)
         settings.setUsbNetFixedOctet(50)
-        settings.setUsbNetLinkTimeout(5)
         assert settings.usbNetwork() == {'role': 1, 'driver': 2, 'subnet': 2,
                                          'client_network': 2, 'fixed_octet': 50}
-        assert settings.getUsbNetLinkTimeout() == 5
 
 
 class TestStatusParsing:

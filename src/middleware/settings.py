@@ -280,15 +280,6 @@ def setUsbNetFixedOctet(value):
     config.setKeyValue('usb_net_fixed_octet', str(int(value)))
 
 
-def getUsbNetLinkTimeout():
-    """Minutes without a USB host before the backlight goes off (0 = off)."""
-    return _get_int('usb_net_link_timeout', 0)
-
-
-def setUsbNetLinkTimeout(value):
-    config.setKeyValue('usb_net_link_timeout', str(int(value)))
-
-
 def usbNetwork():
     """The four persisted network keys as one mapping for netconfig."""
     return {
