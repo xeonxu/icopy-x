@@ -34,10 +34,14 @@ def _titles(activity):
     return activity.getCanvas().get_all_text()
 
 
-def test_a_single_page_says_so():
-    activity = _open()
+def test_the_title_says_which_page_and_how_many():
+    from activity_main import SettingsMenuActivity
 
-    assert '%s 1/1' % resources.get_str('settings') in ' '.join(_titles(activity))
+    activity = _open()
+    pages = max(1, -(-activity._ROW_COUNT // activity._VISIBLE_ROWS))
+    expected = '%s 1/%d' % (resources.get_str('settings'), pages)
+
+    assert expected in ' '.join(_titles(activity))
 
 
 def test_the_page_follows_the_selection():

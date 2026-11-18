@@ -53,6 +53,7 @@ def _walk(activity, row):
 
 def test_both_power_rows_are_rendered(power_calls):
     activity = _open()
+    _walk(activity, activity._ROW_REBOOT)   # scroll if the list is longer
     texts = _texts(activity)
     assert resources.get_str('shutdown') in texts
     assert resources.get_str('reboot') in texts
