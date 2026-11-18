@@ -455,6 +455,19 @@ class VolumeActivity(BaseActivity):
 # SettingsMenuActivity
 # ═══════════════════════════════════════════════════════════════════════
 
+def page_title(title, selected, row_count, visible_rows):
+    """Title text with the "current/total" page indicator.
+
+    ``setTitle`` splits the suffix back off and draws it in the smaller page
+    font, so the title itself keeps its full width. A page is what fits between
+    the title bar and the bottom edge; the window scrolls a row at a time, so
+    the indicator follows the selected row.
+    """
+    total = max(1, -(-row_count // max(1, visible_rows)))
+    current = min(total, selected // max(1, visible_rows) + 1)
+    return '%s %d/%d' % (title, current, total)
+
+
 class SettingsMenuActivity(BaseActivity):
     """Settings menu with selectable rows.
 
@@ -542,6 +555,16 @@ class SettingsMenuActivity(BaseActivity):
         if self.getCanvas() is not None:
             self._render()
 
+    def _page(self):
+        """(page the selection sits on, page count) — see ``page_title``."""
+        total = max(1, -(-self._ROW_COUNT // self._VISIBLE_ROWS))
+        return self._selected // self._VISIBLE_ROWS + 1, total
+
+    def _title(self):
+        """Title with the page indicator, in the small page font."""
+        return page_title(resources.get_str('settings'), self._selected,
+                          self._ROW_COUNT, self._VISIBLE_ROWS)
+
     def _visible_start(self):
         """First row of the window, kept so the selection stays on the panel."""
         if self._selected < self._VISIBLE_ROWS:
@@ -574,7 +597,7 @@ class SettingsMenuActivity(BaseActivity):
             return
 
         # Title + buttons (re-set so the title tracks the active language)
-        self.setTitle(resources.get_str('settings'))
+        self.setTitle(self._title())
         self.setLeftButton('')
         self.setRightButton('')
 
