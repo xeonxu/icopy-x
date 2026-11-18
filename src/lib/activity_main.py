@@ -653,14 +653,12 @@ class SettingsMenuActivity(BaseActivity):
             pass
 
     def onKeyEvent(self, key):
-        if key == KEY_UP:
-            if self._selected > 0:
-                self._selected -= 1
-                self._render()
-        elif key == KEY_DOWN:
-            if self._selected < self._ROW_COUNT - 1:
-                self._selected += 1
-                self._render()
+        if key in (KEY_UP, KEY_DOWN):
+            # Wrap like the main menu: the list has no visible end, so the
+            # selection never stops on a row the operator did not mean to reach.
+            step = -1 if key == KEY_UP else 1
+            self._selected = (self._selected + step) % self._ROW_COUNT
+            self._render()
         elif key == KEY_OK:
             if self._selected == self._ROW_MIRROR:
                 self._toggle_mirror()
